@@ -1,0 +1,22 @@
+{
+  "name": "zalo-logger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Log tin nhắn các nhóm Zalo (tài khoản cá nhân) vào SQLite và xuất Excel theo ngày",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "login": "node src/login.js",
+    "groups": "node src/groups.js",
+    "start": "node src/start.js",
+    "export": "node src/export.js",
+    "selftest": "node test/selftest.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "exceljs": "^4.4.0",
+    "zca-js": "^2.2.0"
+  }
+}
