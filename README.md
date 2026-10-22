@@ -35,8 +35,10 @@ npm start
 Giữ cửa sổ PowerShell mở (và máy không ngủ). Mỗi tin mới của các nhóm trong danh sách được ghi vào `data/zalo-logs.db` và in ra màn hình. Dừng bằng `Ctrl+C`.
 
 - **Không mở Zalo Web** bằng cùng tài khoản khi đang chạy, vì listener sẽ bị ngắt (zca-js chỉ cho 1 listener/tài khoản).
-- Mỗi lần kết nối (lại), tool tự lấy 50 tin gần nhất của từng nhóm để **bù tin bị lỡ**; tin trùng được bỏ qua. Mất kết nối quá lâu (hơn ~50 tin) vẫn có thể thiếu tin.
+- Mỗi lần kết nối (lại), tool tự xin Zalo các tin cũ (theo trang, cho tới hết phần Zalo còn giữ) để **bù tin bị lỡ**; tin trùng được bỏ qua. Tin cũ quá lâu mà Zalo không còn giữ thì không bù được.
 - Tin bị thu hồi được đánh dấu "[Tin nhắn đã thu hồi]" trong Excel, nội dung gốc vẫn giữ trong DB.
+
+Khi sửa mã nguồn, dùng `npm run dev` (nodemon) để tự khởi động lại mỗi khi lưu file trong `src/`, `config/` hoặc `.env`. Mỗi lần khởi động lại tool đăng nhập lại và bù tin cũ, nên chỉ dùng khi phát triển.
 
 ## Xuất Excel
 
@@ -58,9 +60,19 @@ File ra ở `exports/<tên nhóm>_<ngày>.xlsx`, mỗi nhóm một file, gồm 2
 
 Nếu báo không ghi được file, hãy đóng file Excel đang mở rồi chạy lại.
 
+## MongoDB Atlas (ghi song song, tuỳ chọn)
+
+Khi có `MONGODB_URI`, `npm start` ghi mỗi tin vào cả SQLite (bản gốc) lẫn Atlas. Không có URI thì chỉ ghi SQLite.
+
+1. Atlas: tạo cluster miễn phí (M0) > **Database Access**: tạo user + mật khẩu > **Network Access**: thêm IP của máy (hoặc `0.0.0.0/0` khi thử) > **Connect > Drivers**: copy chuỗi kết nối.
+2. `copy .env.example .env`, điền `MONGODB_URI` (mật khẩu có ký tự đặc biệt phải mã hoá URL).
+3. `npm run sync-mongo` đẩy dữ liệu SQLite hiện có lên Atlas (chạy lại bất kỳ lúc nào để bù tin Atlas bị lỡ).
+
+Collection: `groups`, `messages` (unique `groupId + msgId`). Xuất Excel vẫn đọc từ SQLite.
+
 ## Bảo mật
 
-`data/` chứa phiên đăng nhập Zalo (`credentials.json`) và toàn bộ tin nhắn. Đã nằm trong `.gitignore`: **không commit, không gửi cho người khác**.
+`.env` chứa mật khẩu Atlas (đã trong `.gitignore`). `data/` chứa phiên đăng nhập Zalo (`credentials.json`) và toàn bộ tin nhắn. Đã nằm trong `.gitignore`: **không commit, không gửi cho người khác**.
 
 ## Cấu trúc
 

@@ -11,12 +11,19 @@
     "login": "node src/login.js",
     "groups": "node src/groups.js",
     "start": "node src/start.js",
+    "dev": "nodemon",
     "export": "node src/export.js",
+    "sync-mongo": "node src/syncMongo.js",
+    "send-report": "node src/sendReport.js",
     "selftest": "node test/selftest.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "exceljs": "^4.4.0",
+    "mongodb": "^7.7.0",
     "zca-js": "^2.2.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
   }
 }

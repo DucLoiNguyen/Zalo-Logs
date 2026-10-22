@@ -8,3 +8,5 @@ export const CRED_FILE = path.join(DATA_DIR, "credentials.json");
 export const QR_FILE = path.join(DATA_DIR, "qr.png");
 export const CONFIG_FILE = path.join(ROOT, "config", "config.json");
 export const EXPORT_DIR = path.join(ROOT, "exports");
+export const ENV_FILE = path.join(ROOT, ".env");
+export const REPORT_STATE_FILE = path.join(DATA_DIR, "report-state.json");

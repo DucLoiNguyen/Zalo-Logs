@@ -15,5 +15,8 @@ export function loadConfig() {
     throw new Error(`Múi giờ không hợp lệ trong config: "${timezone}"`);
   }
   const groups = Array.isArray(raw.groups) ? raw.groups.map(String).filter((s) => s.trim()) : [];
-  return { timezone, groups };
+  // reportTo: nơi nhận báo cáo ngày, vd { "type": "user" | "group", "id": "..." }. Bỏ trống = không gửi.
+  const r = raw.reportTo;
+  const reportTo = r?.id ? { id: String(r.id), type: r.type === "group" ? "group" : "user" } : null;
+  return { timezone, groups, reportTo };
 }

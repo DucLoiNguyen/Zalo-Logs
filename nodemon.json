@@ -1,0 +1,7 @@
+{
+  "watch": ["src", "config", ".env"],
+  "ext": "js,json",
+  "ignore": ["data", "exports", "test"],
+  "exec": "node src/start.js",
+  "delay": 1000
+}

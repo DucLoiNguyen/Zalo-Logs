@@ -1,13 +1,12 @@
 // Chạy nền: lắng nghe tin nhắn và ghi vào SQLite, chỉ cho các nhóm trong config.
 import { ThreadType, CloseReason } from "zca-js";
 import { loadConfig } from "./config.js";
-import { openDb } from "./db.js";
+import { openStore } from "./store.js";
 import { loginSaved, fetchAllGroups } from "./zaloClient.js";
 import { matchGroups } from "./groupmatch.js";
+import { startDailyReport } from "./daily.js";
 import { describe, formatDateTime, normalizeTs } from "./format.js";
 
-const BACKFILL_COUNT = 50;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(`[${new Date().toLocaleString("vi-VN")}]`, ...a);
 
 const config = loadConfig();
@@ -16,7 +15,7 @@ if (config.groups.length === 0) {
   process.exit(1);
 }
 
-const db = openDb();
+const db = await openStore(log);
 const api = await loginSaved().catch((e) => {
   console.error(e.message);
   process.exit(1);
@@ -75,31 +74,57 @@ api.listener.on("undo", (u) => {
   }
 });
 
-// 3) Bù tin bị lỡ mỗi lần (kết nối lại): listener của zca-js không tự phát lại tin cũ.
-let backfilling = false;
-async function backfill() {
-  if (backfilling) return;
-  backfilling = true;
-  try {
-    for (const [id, name] of allowed) {
-      try {
-        const res = await api.getGroupChatHistory(id, BACKFILL_COUNT);
-        let added = 0;
-        for (const m of res.groupMsgs ?? []) added += save(m, { live: false });
-        if (added) log(`Bù ${added} tin còn thiếu cho nhóm "${name}"`);
-      } catch (e) {
-        log(`Không bù được tin cho "${name}": ${e.message}`);
+// 3) Bù tin bị lỡ mỗi lần kết nối lại. API HTTP getGroupChatHistory đã bị Zalo gỡ (404), nên dùng
+// kênh WebSocket: yêu cầu tin cũ (mọi nhóm, theo trang, cũ -> mới) cho tới khi hết trang.
+const BACKFILL_MAX_PAGES = 200;
+const BACKFILL_PAGE_TIMEOUT_MS = 15000;
+let backfillState = null; // { done, added, pages, timer } khi đang bù
+
+function backfill() {
+  if (backfillState) return Promise.resolve();
+  return new Promise((resolve) => {
+    const st = (backfillState = { added: 0, pages: 0, timer: null });
+    const finish = (note) => {
+      clearTimeout(st.timer);
+      backfillState = null;
+      if (note) log(note);
+      if (st.added) log(`Bù ${st.added} tin còn thiếu`);
+      resolve();
+    };
+    const request = (lastId) => {
+      clearTimeout(st.timer);
+      st.timer = setTimeout(() => finish("⚠ Không bù được tin: Zalo không trả lời yêu cầu tin cũ"), BACKFILL_PAGE_TIMEOUT_MS);
+      api.listener.requestOldMessages(ThreadType.Group, lastId);
+    };
+    st.onPage = (msgs) => {
+      st.pages += 1;
+      for (const m of msgs) {
+        if (!allowed.has(m.threadId)) continue;
+        try {
+          st.added += save(m, { live: false });
+        } catch (e) {
+          log("Lỗi ghi tin bù:", e.message);
+        }
       }
-      await sleep(800);
-    }
-  } finally {
-    backfilling = false;
-  }
+      if (msgs.length === 0) return finish();
+      if (st.pages >= BACKFILL_MAX_PAGES) return finish("⚠ Dừng bù tin: quá nhiều trang");
+      request(msgs.at(-1).data.msgId);
+    };
+    request(null);
+  });
 }
 
-api.listener.on("connected", () => {
+api.listener.on("old_messages", (msgs, type) => {
+  if (type === ThreadType.Group) backfillState?.onPage(msgs);
+});
+
+// 4) Mỗi ngày sau 0h: xuất 1 file Excel của ngày trước và gửi tới reportTo.
+const checkDailyReport = startDailyReport({ api, db, groups: matched, tz: config.timezone, reportTo: config.reportTo, log });
+
+api.listener.on("connected", async () => {
   log("Đã kết nối Zalo, đang lắng nghe...");
-  backfill();
+  await backfill();
+  checkDailyReport(); // bù báo cáo các ngày máy đã tắt lúc 0h
 });
 api.listener.on("closed", (code, reason) => {
   log(`Kết nối đóng (code ${code}${reason ? `, ${reason}` : ""})`);
@@ -111,12 +136,12 @@ api.listener.on("error", (e) => log("Lỗi listener:", e?.message ?? e));
 
 api.listener.start({ retryOnClose: true });
 
-function shutdown() {
+async function shutdown() {
   log("Đang dừng...");
   try {
     api.listener.stop();
   } catch {}
-  db.close();
+  await db.close();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);

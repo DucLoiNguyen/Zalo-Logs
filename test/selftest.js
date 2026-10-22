@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import { openDb } from "../src/db.js";
-import { exportGroup } from "../src/exporter.js";
+import { exportCombined, exportGroup } from "../src/exporter.js";
 import { matchGroups } from "../src/groupmatch.js";
 import { addDays, describe, formatDateTime, parseDay, startOfDay } from "../src/format.js";
 
@@ -90,6 +90,22 @@ assert.equal(m.ambiguous.length, 1);
 
 // 6) Loại tin chưa biết không làm hỏng xuất
 assert.match(describe("chat.todo.xyz", { title: "Việc cần làm" }).text, /\[chat\.todo\.xyz\] Việc cần làm/);
+
+// 7) Gộp nhiều nhóm vào 1 file nhiều sheet
+db.upsertGroup("g2", "Nhóm hai: tên rất dài vượt quá ba mươi mốt ký tự");
+db.insertMessage({ groupId: "g2", msgId: "x1", senderName: "An", msgType: "share.file", content: { title: "b.pdf" }, ts: at(20, 10, 9, 0, 0) });
+const groupsAll = [{ id: "g1", name: "Test Clause Zalo" }, { id: "g2", name: "Nhóm hai: tên rất dài vượt quá ba mươi mốt ký tự" }, { id: "g3", name: "Rỗng" }];
+const comb = await exportCombined({ db, groups: groupsAll, fromMs: from, toMs: to, tz: TZ, outDir: tmp, label: "2026-10-20" });
+assert.equal(comb.groups, 2);
+assert.equal(comb.count, 8);
+assert.equal(comb.files, 3);
+const wc = new ExcelJS.Workbook();
+await wc.xlsx.readFile(comb.file);
+assert.equal(wc.worksheets.length, 3, "2 nhóm có tin + sheet File đính kèm (nhóm rỗng bị bỏ)");
+assert.ok(wc.worksheets.every((w) => w.name.length <= 31 && !/[:\/?*[\]]/.test(w.name)));
+assert.equal(wc.worksheets.at(-1).name, "File đính kèm");
+assert.equal(wc.worksheets.at(-1).rowCount, 4);
+assert.equal(await exportCombined({ db, groups: groupsAll, fromMs: at(1, 1, 0, 0, 0), toMs: at(2, 1, 0, 0, 0), tz: TZ, outDir: tmp, label: "e" }), null);
 
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });
