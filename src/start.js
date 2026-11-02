@@ -1,5 +1,7 @@
 // Chạy nền: lắng nghe tin nhắn và ghi vào SQLite, chỉ cho các nhóm trong config.
 import { ThreadType, CloseReason } from "zca-js";
+import { printBanner } from "./banner.js";
+import { installFileLog } from "./filelog.js";
 import { loadConfig } from "./config.js";
 import { openStore } from "./store.js";
 import { loginSaved, fetchAllGroups } from "./zaloClient.js";
@@ -7,6 +9,8 @@ import { matchGroups } from "./groupmatch.js";
 import { startDailyReport } from "./daily.js";
 import { describe, formatDateTime, normalizeTs } from "./format.js";
 
+installFileLog();
+printBanner();
 const log = (...a) => console.log(`[${new Date().toLocaleString("vi-VN")}]`, ...a);
 
 const config = loadConfig();
@@ -119,9 +123,28 @@ api.listener.on("old_messages", (msgs, type) => {
 });
 
 // 4) Mỗi ngày sau 0h: xuất 1 file Excel của ngày trước và gửi tới reportTo.
-const checkDailyReport = startDailyReport({ api, db, groups: matched, tz: config.timezone, reportTo: config.reportTo, log });
+const checkDailyReport = startDailyReport({ api, db, groups: matched, tz: config.timezone, reportTo: config.reportTo, copyTo: config.exportCopyDir, log });
+
+// Watchdog: kết nối đóng mà không nối lại được trong WATCHDOG_MS thì thoát với mã lỗi,
+// để Task Scheduler (restart on failure) khởi động lại tiến trình thay vì "sống mà không nhận tin".
+// Không áp dụng khi bị phiên Zalo Web khác chiếm (DuplicateConnection): khởi động lại sẽ đá phiên đó ra, gây vòng lặp.
+const WATCHDOG_MS = 2 * 60 * 1000;
+let watchdog = null;
+function armWatchdog(reason) {
+  clearTimeout(watchdog);
+  watchdog = setTimeout(async () => {
+    log(`⚠ ${reason}, quá ${WATCHDOG_MS / 60000} phút chưa nối lại. Thoát để khởi động lại tiến trình.`);
+    try {
+      api.listener.stop();
+    } catch {}
+    await Promise.race([db.close(), sleep(5000)]);
+    process.exit(1);
+  }, WATCHDOG_MS);
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 api.listener.on("connected", async () => {
+  clearTimeout(watchdog);
   log("Đã kết nối Zalo, đang lắng nghe...");
   await backfill();
   checkDailyReport(); // bù báo cáo các ngày máy đã tắt lúc 0h
@@ -130,11 +153,15 @@ api.listener.on("closed", (code, reason) => {
   log(`Kết nối đóng (code ${code}${reason ? `, ${reason}` : ""})`);
   if (code === CloseReason.DuplicateConnection) {
     log("⚠ Có phiên Zalo Web khác đang đăng nhập cùng tài khoản. Đóng phiên đó rồi chạy lại.");
+    clearTimeout(watchdog);
+  } else {
+    armWatchdog("Kết nối Zalo đã đóng");
   }
 });
 api.listener.on("error", (e) => log("Lỗi listener:", e?.message ?? e));
 
 api.listener.start({ retryOnClose: true });
+armWatchdog("Chưa kết nối được Zalo"); // cũng canh lần kết nối đầu tiên
 
 async function shutdown() {
   log("Đang dừng...");

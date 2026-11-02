@@ -1,6 +1,7 @@
 // Báo cáo hằng ngày: sau 0h xuất 1 file Excel (nhiều sheet) của ngày hôm trước
 // và gửi tới `reportTo` (nếu đã cấu hình) trên Zalo. Chỉ gửi file, không kèm tin nhắn.
 import fs from "node:fs";
+import path from "node:path";
 import { ThreadType } from "zca-js";
 import { exportCombined } from "./exporter.js";
 import { addDays, dayLabel, parseDay, startOfDay } from "./format.js";
@@ -21,7 +22,7 @@ function writeLastSent(day) {
 }
 
 /** Xuất 1 ngày thành 1 file nhiều sheet và gửi tới reportTo (nếu có; không thì chỉ xuất file). Trả về kết quả xuất, hoặc null nếu ngày đó không có tin. */
-export async function sendDayReport({ api, db, groups, tz, day, reportTo, log }) {
+export async function sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log }) {
   const label = dayLabel(day);
   const fromMs = startOfDay(day, tz);
   const toMs = startOfDay(addDays(day, 1), tz);
@@ -29,6 +30,17 @@ export async function sendDayReport({ api, db, groups, tz, day, reportTo, log })
   if (!res) {
     log(`Báo cáo ${label}: không có tin nào, bỏ qua.`);
     return null;
+  }
+  if (copyTo) {
+    // Chép thêm sang thư mục phụ; lỗi ở đây chỉ cảnh báo, không chặn việc gửi Zalo.
+    try {
+      fs.mkdirSync(copyTo, { recursive: true });
+      const dest = path.join(copyTo, path.basename(res.file));
+      fs.copyFileSync(res.file, dest);
+      log(`Đã chép báo cáo ${label} vào ${dest}`);
+    } catch (e) {
+      log(`⚠ Không chép được báo cáo ${label} vào ${copyTo}: ${e.message}`);
+    }
   }
   if (!reportTo) {
     log(`Đã xuất báo cáo ${label}: ${res.count} tin, ${res.groups} nhóm, ${res.files} file đính kèm -> ${res.file}`);
@@ -45,7 +57,7 @@ export async function sendDayReport({ api, db, groups, tz, day, reportTo, log })
  * Ngày nào không có tin thì bỏ qua và đánh dấu đã xử lý.
  * @returns {() => Promise<void>} hàm chạy kiểm tra ngay (gọi khi vừa kết nối)
  */
-export function startDailyReport({ api, db, groups, tz, reportTo, log }) {
+export function startDailyReport({ api, db, groups, tz, reportTo, copyTo, log }) {
   if (!reportTo) log('Chưa đặt "reportTo": báo cáo ngày chỉ xuất file vào exports/, không gửi Zalo.');
   let running = false;
 
@@ -61,7 +73,7 @@ export function startDailyReport({ api, db, groups, tz, reportTo, log }) {
       if (dayLabel(day) < dayLabel(earliest)) day = earliest;
 
       for (; dayLabel(day) <= dayLabel(yesterday); day = addDays(day, 1)) {
-        await sendDayReport({ api, db, groups, tz, day, reportTo, log });
+        await sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log });
         writeLastSent(dayLabel(day));
       }
     } catch (e) {

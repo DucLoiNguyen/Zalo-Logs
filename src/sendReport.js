@@ -18,7 +18,7 @@ try {
   const api = await loginSaved();
   const { matched } = matchGroups(config.groups, [...(await fetchAllGroups(api)).values()]);
   const day = parseDay(values.date ?? "yesterday", config.timezone);
-  await sendDayReport({ api, db, groups: matched, tz: config.timezone, day, reportTo: config.reportTo, log });
+  await sendDayReport({ api, db, groups: matched, tz: config.timezone, day, reportTo: config.reportTo, copyTo: config.exportCopyDir, log });
   await db.close();
   process.exit(0);
 } catch (e) {

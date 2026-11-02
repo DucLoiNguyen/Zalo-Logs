@@ -10,3 +10,4 @@ export const CONFIG_FILE = path.join(ROOT, "config", "config.json");
 export const EXPORT_DIR = path.join(ROOT, "exports");
 export const ENV_FILE = path.join(ROOT, ".env");
 export const REPORT_STATE_FILE = path.join(DATA_DIR, "report-state.json");
+export const LOG_FILE = path.join(DATA_DIR, "start.log");

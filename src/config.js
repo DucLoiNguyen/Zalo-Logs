@@ -18,5 +18,7 @@ export function loadConfig() {
   // reportTo: nơi nhận báo cáo ngày, vd { "type": "user" | "group", "id": "..." }. Bỏ trống = không gửi.
   const r = raw.reportTo;
   const reportTo = r?.id ? { id: String(r.id), type: r.type === "group" ? "group" : "user" } : null;
-  return { timezone, groups, reportTo };
+  // exportCopyDir: thư mục phụ (vd OneDrive) để chép thêm file báo cáo ngày vào. Bỏ trống = không chép.
+  const exportCopyDir = typeof raw.exportCopyDir === "string" && raw.exportCopyDir.trim() ? raw.exportCopyDir.trim() : null;
+  return { timezone, groups, reportTo, exportCopyDir };
 }
