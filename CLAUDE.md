@@ -14,7 +14,7 @@ Node >= 20 (máy dev: v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, 
 - `npm start`: lắng nghe và ghi log (SQLite + Atlas nếu có `MONGODB_URI`)
 - `npm run export -- [--date|--from --to|--group|--out]`: xuất Excel từ SQLite
 - `npm run sync-mongo`: đẩy toàn bộ SQLite lên Atlas (idempotent)
-- `npm run send-report [-- --date today]`: xuất + gửi tay báo cáo 1 ngày tới `reportTo`
+- `npm run send-report [-- --date today]`: xuất + chép (`exportCopyDir`) + gửi tay báo cáo 1 ngày tới `reportTo` (không có `reportTo` thì chỉ xuất/chép)
 - `.\setup-autostart.ps1 [-Remove]`: Task Scheduler tự chạy `node src/start.js` khi đăng nhập, cửa sổ console hiện banner + log (task KHÔNG chuyển hướng output). Task có 2 trigger: đăng nhập + lặp mỗi 5 phút (`IgnoreNew`) để chạy lại sau khi watchdog thoát; "restart on failure" của Task Scheduler KHÔNG chạy khi thoát mã khác 0 (đã thử), đừng dựa vào nó
 - `npm run stop` / `npm run resume` (`stop-logger.ps1`, `resume-logger.ps1`, UTF-8 BOM): stop = tắt (Disable) task + dừng tiến trình `start.js`, tool không tự chạy lại; resume = bật lại task và chạy ngay (không chạy thêm nếu đã có tiến trình). Không gỡ task. Đóng console/Ctrl+C mà không `stop` thì tối đa 5 phút sau task chạy lại
 - `npm run dev`: chạy `start.js` bằng nodemon (tự khởi động lại khi sửa `src/`, `config/`, `.env`; cấu hình ở `nodemon.json`). Dùng khi phát triển, còn chạy thật dùng `npm start`
@@ -26,7 +26,7 @@ Node >= 20 (máy dev: v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, 
 - `db.js`: SQLite WAL, bảng `groups`, `messages` (PK `group_id, msg_id`, `INSERT OR IGNORE`)
 - `mongo.js`: kết nối Atlas, db `MONGODB_DB` (mặc định `zalo_logger`), collection `groups` (`_id` = group id) và `messages` (unique `{groupId, msgId}`, index `{groupId, ts}`, `content` lưu object gốc, `recalled` boolean). Nạp `.env` bằng `process.loadEnvFile`
 - `syncMongo.js`: đồng bộ bù SQLite -> Atlas
-- `daily.js`: sau 0h (kiểm tra mỗi phút + khi vừa kết nối) xuất 1 file nhiều sheet `exports/Zalo_<ngày>.xlsx` (`exportCombined`: mỗi nhóm 1 sheet + sheet "File đính kèm") và gửi file (không kèm chữ) tới `reportTo` trong config. Nếu config có `exportCopyDir` (thư mục OneDrive) thì chép thêm file vào đó (lỗi chép chỉ cảnh báo, không chặn gửi Zalo). Chưa đặt `reportTo` thì chỉ xuất file vào `exports/`; trạng thái ở `data/report-state.json`, bù tối đa 7 ngày
+- `daily.js`: sau 0h (kiểm tra mỗi phút + khi vừa kết nối) xuất 1 file nhiều sheet `exports/Zalo_<ngày>.xlsx` (`exportCombined`: mỗi nhóm 1 sheet + sheet "File đính kèm") và, **chỉ khi config có `reportTo`**, gửi file (không kèm chữ) tới đó. Hiện config KHÔNG có `reportTo` (đã bỏ 31/10 theo yêu cầu) nên chỉ xuất file vào `exports/`. Nếu config có `exportCopyDir` (thư mục OneDrive) thì chép thêm file vào đó (lỗi chép chỉ cảnh báo, không chặn việc khác); trạng thái ở `data/report-state.json`, bù tối đa 7 ngày
 - `export.js` + `exporter.js`: xuất xlsx (2 sheet: "Tin nhắn", "Tổng hợp file đính kèm"), **đọc từ SQLite, không đọc Atlas**
 - `format.js`: múi giờ, `describe()` ánh xạ loại tin thành nhãn tiếng Việt (nhãn là suy đoán, sửa ở đây rồi xuất lại)
 - `banner.js`: banner ASCII "Zalo Logger" + phiên bản in ở đầu console khi `start.js` chạy (chỉ ASCII để tránh lỗi font trên cmd; tắt màu bằng `NO_COLOR=1`)
@@ -41,6 +41,8 @@ Node >= 20 (máy dev: v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, 
 - `api.getGroupChatHistory` (HTTP) đã bị Zalo gỡ, trả 404; đừng dùng lại. Backfill dùng `listener.requestOldMessages(ThreadType.Group, lastMsgId)` + sự kiện `old_messages` (cửa sổ tin Zalo còn giữ phía server, không giới hạn 50).
 - Chưa tải ảnh/file đính kèm, chỉ ghi tên file.
 - `exports/~$*.xlsx` là file tạm của Excel, bỏ qua.
+- Task Scheduler báo `LastTaskResult` = 2147946720 (0x800710E0) là bình thường: lần lặp 5 phút bị bỏ qua vì tool đang chạy (`IgnoreNew`). Muốn biết tool có chạy không thì xem tiến trình `node ... src\start.js` và đuôi `data/start.log`.
+- Ngày không có tin thì không có file `exports/Zalo_<ngày>.xlsx` (vd 25/10), không phải lỗi.
 
 ## Nhật ký làm việc
 - 2026-10-22: Đọc toàn bộ dự án; tạo CLAUDE.md; thêm MongoDB Atlas ghi song song (`mongo.js`, `store.js`, `syncMongo.js`, `.env.example`). Selftest đạt.
@@ -55,4 +57,5 @@ Node >= 20 (máy dev: v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, 
 - 2026-10-28 (chiều): đặt `reportTo` = user Nguyễn Thúy Hòa (SĐT tra bằng `api.findUser`) trong `config/config.json`; báo cáo 0h sẽ gửi file cho người này. **Còn dở:** cần khởi động lại tool để nhận config; chưa test gửi thật (Zalo có thể từ chối nếu chưa là bạn bè).
 - 2026-10-30: thêm `exportCopyDir` trong config (`config.js`, `daily.js`, `start.js`, `sendReport.js`): báo cáo ngày được chép thêm vào thư mục OneDrive `...\Premier Service Team - Tạo tài khoản GOV_260916\zalo`. **Còn dở:** cần khởi động lại tool để nhận config; chưa test chép thật.
 - 2026-10-31 (sau): bỏ `reportTo` khỏi `config/config.json` theo yêu cầu: 0h chỉ xuất `exports/Zalo_<ngày>.xlsx` và chép vào `exportCopyDir`, không gửi Zalo (code gửi vẫn còn, bật lại bằng cách thêm `reportTo`). Đã khởi động lại tool.
+- 2026-11-02: rà soát toàn dự án. Tool chạy ổn từ 07:46 (task Running, 1 tiến trình), tin live vẫn vào; báo cáo 0h của 31/10 và 01/11 đều xuất + chép OneDrive OK (không gửi Zalo). SQLite 1464 tin/4 nhóm, `sync-mongo` báo 0 tin mới => Atlas đồng bộ đủ. Selftest đạt. Watchdog đã thoát thật 1 lần (31/10 00:42, lẫn với lúc thử stop/resume), chưa gặp ca 1006 tự nhiên nào mới. Git sạch (đã commit `6c96e0c`). **Còn dở:** đổi mật khẩu/xoá user Admin Atlas đã lộ qua ảnh, cân nhắc thu hẹp Network Access `0.0.0.0/0`; chưa tự đồng bộ Mongo định kỳ (chỉ ghi song song + `sync-mongo` tay); gửi Zalo qua `reportTo` chưa từng test thật.
 - 2026-10-31: thêm `npm run stop` / `npm run resume` (dừng hẳn không tự bật lại, không gỡ task); đã thử stop -> resume OK. Việc chép sang OneDrive đã thử ngày 30/10 (OK); gửi Zalo cho `reportTo` vẫn chưa thử thật.
