@@ -1,0 +1,20 @@
+[
+  {"request_message_id": "m2001", "group_id": "cs-khach-hang",
+   "title": "Khách không đăng nhập được app (báo sai mật khẩu)",
+   "description": "Khách phàn nàn chưa ai xử lý, đã mất 2 đơn hàng. Cần ưu tiên ngay và phản hồi khách.",
+   "category": "bug", "priority": "urgent",
+   "customer_name": "Chị Hoa (Shop Hoa Mai)", "customer_zalo_id": "c_01",
+   "assignee_zalo_id": null, "due": null,
+   "source_message_ids": ["m2001", "m2010"],
+   "quote": "Sao chưa ai xử lý vậy, mình mất 2 đơn rồi đấy",
+   "status_hint": "open", "confidence": 0.95},
+  {"request_message_id": "m2004", "group_id": "cs-khach-hang",
+   "title": "Gửi hoá đơn VAT tháng 10 cho Nam Store",
+   "description": "Khách báo thêm: hoá đơn tháng 9 ghi sai mã số thuế, đề nghị sửa cùng lúc.",
+   "category": "billing", "priority": null,
+   "customer_name": "Anh Nam (Nam Store)", "customer_zalo_id": "c_02",
+   "assignee_zalo_id": "u_202", "due": "2026-11-04T17:00",
+   "source_message_ids": ["m2004", "m2011"],
+   "quote": "À hoá đơn tháng 9 cũng ghi sai mã số thuế, sửa luôn giúp mình",
+   "status_hint": "open", "confidence": 0.85}
+]

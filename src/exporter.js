@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import { describe, toExcelDateTime, toExcelDay } from "./format.js";
+import { mediaHref } from "./media.js";
 
 const MAX_CELL = 32000; // Excel giới hạn 32767 ký tự/ô
 const HEADER_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
@@ -39,27 +40,48 @@ const LOG_COLUMNS = [
   { header: "Người gửi", key: "sender" },
   { header: "Loại", key: "kind" },
   { header: "Nội dung", key: "text" },
+  { header: "Tệp đính kèm", key: "link" },
 ];
 
-/** Ghi các dòng tin nhắn vào ws (đã có LOG_COLUMNS), trả về danh sách file đính kèm. */
-function fillLogSheet(ws, rows, tz) {
+const LINK_FONT = { color: { argb: "FF0563C1" }, underline: true };
+
+/**
+ * Ghi các dòng tin nhắn vào ws (đã có LOG_COLUMNS), trả về danh sách file đính kèm.
+ * media: Map msgId -> đường dẫn tệp đã tải (từ db.queryMedia); link là đường dẫn TƯƠNG ĐỐI (media/...)
+ * nên mở được ở bất kỳ máy nào miễn là file báo cáo và thư mục media nằm cạnh nhau (như trong OneDrive).
+ */
+function fillLogSheet(ws, rows, tz, media = new Map()) {
   const files = [];
   for (const r of rows) {
     const d = describe(r.msgType, r.content, r.recalled);
     const sender = r.senderName || r.senderId || "";
-    ws.addRow({
+    const rel = media.get(r.msgId);
+    const href = rel ? mediaHref(rel) : null;
+    const row = ws.addRow({
       day: toExcelDay(r.ts, tz),
       time: toExcelDateTime(r.ts, tz),
       sender,
       kind: d.kind,
       text: d.text.slice(0, MAX_CELL),
+      link: href ? { text: path.posix.basename(rel), hyperlink: href } : "",
     });
-    if (d.kind === "Tập tin") files.push({ sender, name: d.fileName, time: toExcelDateTime(r.ts, tz) });
+    if (href) row.getCell("link").font = LINK_FONT;
+    if (d.kind === "Tập tin") files.push({ sender, name: d.fileName, time: toExcelDateTime(r.ts, tz), href });
   }
   ws.getColumn("day").numFmt = "dd/mm/yyyy";
   ws.getColumn("time").numFmt = "dd/mm/yyyy hh:mm:ss";
-  styleSheet(ws, [12, 20, 26, 13, 90], [5]);
+  styleSheet(ws, [12, 20, 26, 13, 90, 45], [5, 6]);
   return files;
+}
+
+/** Ô "Tên file" ở sheet tổng hợp: có link tới tệp đã tải thì là hyperlink. */
+function nameCell(f) {
+  return f.href ? { text: f.name, hyperlink: f.href } : f.name;
+}
+function styleNameLinks(ws, files, col) {
+  files.forEach((f, i) => {
+    if (f.href) ws.getRow(i + 2).getCell(col).font = LINK_FONT;
+  });
 }
 
 async function writeWorkbook(wb, outDir, name) {
@@ -93,10 +115,11 @@ export async function exportGroup({ db, group, fromMs, toMs, tz, outDir, label }
     { header: "Thời gian", key: "time" },
   ];
 
-  const files = fillLogSheet(logSheet, rows, tz);
-  files.forEach((f, i) => fileSheet.addRow({ stt: i + 1, ...f }));
+  const files = fillLogSheet(logSheet, rows, tz, db.queryMedia?.(group.id, fromMs, toMs));
+  files.forEach((f, i) => fileSheet.addRow({ stt: i + 1, ...f, name: nameCell(f) }));
   fileSheet.getColumn("time").numFmt = "dd/mm/yyyy hh:mm:ss";
   styleSheet(fileSheet, [7, 26, 60, 20], [3]);
+  styleNameLinks(fileSheet, files, 3);
 
   const file = await writeWorkbook(wb, outDir, `${safeFileName(group.name)}_${label}.xlsx`);
   return { file, count: rows.length, files: files.length };
@@ -130,7 +153,7 @@ export async function exportCombined({ db, groups, fromMs, toMs, tz, outDir, lab
     if (rows.length === 0) continue;
     const ws = wb.addWorksheet(sheetName(g.name, used));
     ws.columns = LOG_COLUMNS;
-    for (const f of fillLogSheet(ws, rows, tz)) attach.push({ group: g.name, ...f });
+    for (const f of fillLogSheet(ws, rows, tz, db.queryMedia?.(g.id, fromMs, toMs))) attach.push({ group: g.name, ...f });
     count += rows.length;
     nGroups += 1;
   }
@@ -144,9 +167,10 @@ export async function exportCombined({ db, groups, fromMs, toMs, tz, outDir, lab
     { header: "Tên file", key: "name" },
     { header: "Thời gian", key: "time" },
   ];
-  attach.forEach((f, i) => fileSheet.addRow({ stt: i + 1, ...f }));
+  attach.forEach((f, i) => fileSheet.addRow({ stt: i + 1, ...f, name: nameCell(f) }));
   fileSheet.getColumn("time").numFmt = "dd/mm/yyyy hh:mm:ss";
   styleSheet(fileSheet, [7, 28, 26, 60, 20], [2, 4]);
+  styleNameLinks(fileSheet, attach, 4);
 
   const file = await writeWorkbook(wb, outDir, `Zalo_${label}.xlsx`);
   return { file, count, files: attach.length, groups: nGroups };

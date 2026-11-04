@@ -8,6 +8,7 @@ import { loginSaved, fetchAllGroups } from "./zaloClient.js";
 import { matchGroups } from "./groupmatch.js";
 import { startDailyReport } from "./daily.js";
 import { describe, formatDateTime, normalizeTs } from "./format.js";
+import { createMediaQueue, MEDIA_TYPES } from "./media.js";
 
 installFileLog();
 printBanner();
@@ -39,6 +40,12 @@ for (const g of matched) db.upsertGroup(g.id, g.name);
 log(`Đang log ${matched.length} nhóm:`);
 for (const g of matched) log(`  - ${g.name} (${g.id})`);
 
+// Tải ảnh/file/video về exports/media (nền, vài tệp cùng lúc). Tắt bằng "downloadMedia": false trong config.
+const mediaQueue = config.downloadMedia
+  ? createMediaQueue({ db: db.sqlite, tz: config.timezone, maxBytes: config.mediaMaxMB * 1048576, log })
+  : null;
+const MEDIA_RETRY_DAYS = 3; // mỗi lần kết nối: tải lại tin 3 ngày gần nhất chưa tải được; cũ hơn dùng npm run download-media
+
 // 2) Ghi tin nhắn
 function save(msg, { live }) {
   const d = msg.data;
@@ -52,6 +59,16 @@ function save(msg, { live }) {
     content: d.content,
     ts,
   });
+  if (added && mediaQueue && MEDIA_TYPES.includes(d.msgType)) {
+    mediaQueue.add({
+      groupId: String(msg.threadId),
+      groupName: allowed.get(msg.threadId),
+      msgId: String(d.msgId),
+      msgType: d.msgType,
+      content: d.content,
+      ts,
+    });
+  }
   if (added && live) {
     const text = describe(d.msgType, d.content).text.replace(/\s+/g, " ").slice(0, 80);
     log(`${allowed.get(msg.threadId)} | ${formatDateTime(ts, config.timezone)} ${d.dName}: ${text}`);
@@ -147,6 +164,8 @@ api.listener.on("connected", async () => {
   clearTimeout(watchdog);
   log("Đã kết nối Zalo, đang lắng nghe...");
   await backfill();
+  const pending = mediaQueue?.addPending(Date.now() - MEDIA_RETRY_DAYS * 86400_000) ?? 0;
+  if (pending) log(`Tải ${pending} tệp đính kèm chưa tải (${MEDIA_RETRY_DAYS} ngày gần nhất)`);
   checkDailyReport(); // bù báo cáo các ngày máy đã tắt lúc 0h
 });
 api.listener.on("closed", (code, reason) => {

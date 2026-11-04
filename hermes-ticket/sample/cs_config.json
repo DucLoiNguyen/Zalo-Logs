@@ -1,0 +1,74 @@
+{
+  "_ghi_chu": "staff = nhân viên CS (mọi from_id khác coi là khách). categories = quy tắc điều phối. sla_hours = hạn xử lý mặc định theo ưu tiên. jsm_request_type = tên Request Type trên Jira Service Management (sửa cho khớp khi có JSM).",
+  "staff": {
+    "u_200": {
+      "name": "Lợi",
+      "team": "CS",
+      "github": "DucLoiNguyen",
+      "jira": "loi@congty.vn"
+    },
+    "u_201": {
+      "name": "Phong",
+      "team": "Kỹ thuật",
+      "github": "phong-dev",
+      "jira": "phong@congty.vn"
+    },
+    "u_202": {
+      "name": "Trang",
+      "team": "Kế toán",
+      "github": "trang-acc",
+      "jira": "trang@congty.vn"
+    },
+    "u_203": {
+      "name": "Hà",
+      "team": "Sản phẩm",
+      "github": "ha-pm",
+      "jira": "ha@congty.vn"
+    }
+  },
+  "categories": {
+    "bug": {
+      "label": "Lỗi kỹ thuật",
+      "assignee": "u_201",
+      "priority": "high",
+      "jsm_request_type": "Báo lỗi"
+    },
+    "account": {
+      "label": "Tài khoản",
+      "assignee": "u_200",
+      "priority": "high",
+      "jsm_request_type": "Hỗ trợ tài khoản"
+    },
+    "billing": {
+      "label": "Thanh toán/Hoá đơn",
+      "assignee": "u_202",
+      "priority": "medium",
+      "jsm_request_type": "Thanh toán & hoá đơn"
+    },
+    "question": {
+      "label": "Hỏi đáp",
+      "assignee": "u_200",
+      "priority": "low",
+      "jsm_request_type": "Câu hỏi chung"
+    },
+    "feature_request": {
+      "label": "Đề xuất tính năng",
+      "assignee": "u_203",
+      "priority": "low",
+      "jsm_request_type": "Đề xuất tính năng"
+    },
+    "complaint": {
+      "label": "Khiếu nại",
+      "assignee": "u_200",
+      "priority": "high",
+      "jsm_request_type": "Khiếu nại"
+    }
+  },
+  "default_assignee": "u_200",
+  "sla_hours": {
+    "urgent": 2,
+    "high": 4,
+    "medium": 24,
+    "low": 72
+  }
+}

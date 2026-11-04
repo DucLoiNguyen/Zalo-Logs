@@ -20,5 +20,8 @@ export function loadConfig() {
   const reportTo = r?.id ? { id: String(r.id), type: r.type === "group" ? "group" : "user" } : null;
   // exportCopyDir: thư mục phụ (vd OneDrive) để chép thêm file báo cáo ngày vào. Bỏ trống = không chép.
   const exportCopyDir = typeof raw.exportCopyDir === "string" && raw.exportCopyDir.trim() ? raw.exportCopyDir.trim() : null;
-  return { timezone, groups, reportTo, exportCopyDir };
+  // downloadMedia: tải ảnh/file/video về exports/media (mặc định bật); mediaMaxMB: bỏ qua tệp lớn hơn mức này.
+  const downloadMedia = raw.downloadMedia !== false;
+  const mediaMaxMB = Number(raw.mediaMaxMB) > 0 ? Number(raw.mediaMaxMB) : 100;
+  return { timezone, groups, reportTo, exportCopyDir, downloadMedia, mediaMaxMB };
 }

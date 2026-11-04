@@ -15,6 +15,7 @@
     "export": "node src/export.js",
     "sync-mongo": "node src/syncMongo.js",
     "send-report": "node src/sendReport.js",
+    "download-media": "node src/downloadMedia.js",
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File stop-logger.ps1",
     "resume": "powershell -NoProfile -ExecutionPolicy Bypass -File resume-logger.ps1",
     "selftest": "node test/selftest.js"
