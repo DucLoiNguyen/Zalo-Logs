@@ -40,6 +40,14 @@ Giữ cửa sổ PowerShell mở (và máy không ngủ). Mỗi tin mới của 
 
 Khi sửa mã nguồn, dùng `npm run dev` (nodemon) để tự khởi động lại mỗi khi lưu file trong `src/`, `config/` hoặc `.env`. Mỗi lần khởi động lại tool đăng nhập lại và bù tin cũ, nên chỉ dùng khi phát triển.
 
+## Tải ảnh, file, video
+
+`npm start` tự tải ảnh/file/video của tin mới về `exports/media/<ngày>/<nhóm>/` (link tải nằm sẵn trong tin, không cần đăng nhập thêm). Mỗi lần kết nối lại, tool tải thêm những tệp 3 ngày gần nhất chưa tải được. Tệp lớn hơn `mediaMaxMB` (mặc định 100) bị bỏ qua; tắt hẳn bằng `"downloadMedia": false` trong `config/config.json`.
+
+Muốn tải bù tin cũ hơn (tuỳ chọn): `npm run download-media` (tất cả) hoặc `npm run download-media -- --days 7`. Link Zalo có thể hết hạn nên tin càng cũ càng dễ lỗi.
+
+Trong file Excel, cột "Tệp đính kèm" là link tương đối `media/...`. Mở được ở máy khác nếu file báo cáo và thư mục `media` nằm cạnh nhau (báo cáo 0h chép cả hai sang `exportCopyDir`). Ảnh/file chứa dữ liệu của nhiều người: đừng chia sẻ thư mục `media` ra ngoài.
+
 ## Xuất Excel
 
 Không cần đăng nhập Zalo, đọc thẳng từ DB:

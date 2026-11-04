@@ -7,6 +7,7 @@ import ExcelJS from "exceljs";
 import { openDb } from "../src/db.js";
 import { exportCombined, exportGroup } from "../src/exporter.js";
 import { matchGroups } from "../src/groupmatch.js";
+import { mediaHref, mediaOf } from "../src/media.js";
 import { addDays, describe, formatDateTime, parseDay, startOfDay } from "../src/format.js";
 
 const TZ = "Asia/Ho_Chi_Minh";
@@ -106,6 +107,29 @@ assert.ok(wc.worksheets.every((w) => w.name.length <= 31 && !/[:\/?*[\]]/.test(w
 assert.equal(wc.worksheets.at(-1).name, "File đính kèm");
 assert.equal(wc.worksheets.at(-1).rowCount, 4);
 assert.equal(await exportCombined({ db, groups: groupsAll, fromMs: at(1, 1, 0, 0, 0), toMs: at(2, 1, 0, 0, 0), tz: TZ, outDir: tmp, label: "e" }), null);
+
+// 8) Media: lấy link tải + link tương đối trong Excel
+assert.deepEqual(mediaOf("share.file", { title: "a b.xlsx", href: "https://f.example/gr/x", params: '{"fileSize":"4222"}' }), {
+  url: "https://f.example/gr/x", name: "a b.xlsx", size: 4222,
+});
+const ph = mediaOf("chat.photo", { href: "https://p.example/a/b.jpg", params: '{"hd":"https://p.example/a/hd.png"}' });
+assert.equal(ph.url, "https://p.example/a/hd.png");
+assert.equal(ph.name, "anh.png");
+assert.equal(mediaOf("webchat", "xin chào"), null);
+assert.equal(mediaOf("chat.photo", { href: "" }), null, "không có link thì bỏ qua");
+assert.equal(mediaHref("2026-10-20/Nhóm A/102526_báo cáo (1).xlsx"), "media/2026-10-20/Nh%C3%B3m%20A/102526_b%C3%A1o%20c%C3%A1o%20(1).xlsx");
+
+db.insertMessage({ groupId: "g1", msgId: "p1", senderName: "An", msgType: "chat.photo", content: { href: "https://p.example/a.jpg" }, ts: at(20, 10, 9, 30, 0) });
+db.setMedia({ groupId: "g1", msgId: "p1", relPath: "2026-10-20/Test/093000_anh.jpg", status: "ok", size: 5 });
+db.setMedia({ groupId: "g1", msgId: "m1", status: "failed", error: "HTTP 404" });
+assert.equal(db.queryMedia("g1", from, to).get("p1"), "2026-10-20/Test/093000_anh.jpg");
+assert.equal(db.queryMedia("g1", from, to).has("m1"), false, "tệp lỗi không có link");
+assert.deepEqual(db.pendingMedia(0).map((r) => r.msgId), ["x1", "m1", "m3", "m4"], "chưa tải + lỗi; p1 đã ok nên không còn");
+const withMedia = await exportGroup({ db, group: { id: "g1", name: "Test Clause Zalo" }, fromMs: from, toMs: to, tz: TZ, outDir: tmp, label: "media" });
+const wm = new ExcelJS.Workbook();
+await wm.xlsx.readFile(withMedia.file);
+const photoRow = wm.getWorksheet("Tin nhắn").getRows(2, 20).find((r) => r.getCell(4).value === "Hình ảnh" && r.getCell(6).value);
+assert.equal(photoRow.getCell(6).value.hyperlink, "media/2026-10-20/Test/093000_anh.jpg");
 
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });

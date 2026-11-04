@@ -5,6 +5,7 @@ import path from "node:path";
 import { ThreadType } from "zca-js";
 import { exportCombined } from "./exporter.js";
 import { addDays, dayLabel, parseDay, startOfDay } from "./format.js";
+import { copyMediaDay } from "./media.js";
 import { EXPORT_DIR, REPORT_STATE_FILE } from "./paths.js";
 
 const MAX_CATCHUP_DAYS = 7; // máy tắt lâu thì chỉ bù tối đa 7 ngày gần nhất
@@ -34,6 +35,9 @@ export async function sendDayReport({ api, db, groups, tz, day, reportTo, copyTo
   if (copyTo) {
     // Chép thêm sang thư mục phụ; lỗi ở đây chỉ cảnh báo, không chặn việc gửi Zalo.
     try {
+      // Chép media của ngày trước để link tương đối trong file báo cáo mở được từ thư mục đích.
+      const n = copyMediaDay(label, copyTo);
+      if (n) log(`Đã chép ${n} tệp đính kèm của ${label} vào ${path.join(copyTo, "media", label)}`);
       fs.mkdirSync(copyTo, { recursive: true });
       const dest = path.join(copyTo, path.basename(res.file));
       fs.copyFileSync(res.file, dest);

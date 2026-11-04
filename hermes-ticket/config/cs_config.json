@@ -1,0 +1,32 @@
+{
+  "_ghi_chu": "Cấu hình THẬT cho team (bản 04/11). staff = 10 người gửi trong nhóm nội bộ CSA18.9.26 (ID lấy từ zalo-logs.db). Tạm thời mọi loại giao cho Đức Lợi Nguyễn, SLA 30 phút; cập nhật khi có phân công.",
+  "staff": {
+    "1857352237546357054": {"name": "Đức Lợi Nguyễn", "jira": ""},
+    "113899950454279020":  {"name": "Công Tấn", "jira": ""},
+    "2005972980377670446": {"name": "Lê Văn Trọng", "jira": ""},
+    "4505174345933858173": {"name": "Hoang Le", "jira": ""},
+    "4939432806164158068": {"name": "Nguyễn Thành Vinh", "jira": ""},
+    "6068575826552651215": {"name": "Tạ Thanh Hoàng", "jira": ""},
+    "6448697737202776454": {"name": "Nguyễn Thúy Hòa", "jira": ""},
+    "7380377539362886804": {"name": "Trần Huân", "jira": ""},
+    "8655707605082012135": {"name": "Huy Đào", "jira": ""}
+  },
+  "system_senders": ["5376023858510253923"],
+  "groups": {
+    "5216811275487163293": {"name": "CSA18.9.26", "mode": "internal"},
+    "3278675867060417400": {"name": "Sử dụng nền tảng AI Quốc Gia", "mode": "customer"},
+    "7934340105422269668": {"name": "Sử dụng nền tảng AI QG 2", "mode": "customer"},
+    "1392611780732411563": {"name": "Hỗ trợ sử dụng AI công vụ TPHCM - CMC AI", "mode": "customer"}
+  },
+  "categories": {
+    "account_registration": {"label": "Đăng ký tạo tài khoản", "jsm_request_type": "Đăng ký tạo tài khoản", "priority": "medium"},
+    "account_change":       {"label": "Huỷ, cấp lại, sửa tài khoản", "jsm_request_type": "Thay đổi tài khoản", "priority": "medium"},
+    "access_issue":         {"label": "Lỗi đăng nhập, sử dụng", "jsm_request_type": "Báo lỗi", "priority": "high"},
+    "question":             {"label": "Hỏi đáp, hướng dẫn", "jsm_request_type": "Câu hỏi chung", "priority": "low"},
+    "report_request":       {"label": "Yêu cầu thống kê, báo cáo", "jsm_request_type": "Yêu cầu báo cáo", "priority": "medium"},
+    "complaint":            {"label": "Khiếu nại", "jsm_request_type": "Khiếu nại", "priority": "high"},
+    "internal_task":        {"label": "Task nội bộ", "jsm_request_type": "Task nội bộ", "priority": "medium"}
+  },
+  "default_assignee": "1857352237546357054",
+  "sla_minutes": {"urgent": 30, "high": 30, "medium": 30, "low": 30}
+}
