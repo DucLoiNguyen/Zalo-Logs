@@ -17,7 +17,7 @@ npm run login      # quét QR bằng Zalo trên điện thoại, xác nhận tr�
 npm run groups     # xem tên + ID các nhóm (lọc: npm run groups -- <từ khoá>)
 ```
 
-Mở `config/config.json`, điền **tên hoặc ID** các nhóm cần log:
+Chép `config/config.example.json` thành `config/config.json` (file này không được commit vì chứa tên nhóm và đường dẫn riêng của máy), rồi điền **tên hoặc ID** các nhóm cần log:
 
 ```json
 {

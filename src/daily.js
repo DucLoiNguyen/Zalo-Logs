@@ -9,44 +9,52 @@ import { copyMediaDay } from "./media.js";
 import { EXPORT_DIR, MEDIA_DIR, REPORT_STATE_FILE } from "./paths.js";
 import { pruneExports } from "./prune.js";
 
+const RETRY_COPY_MS = 10 * 60_000; // chép lại các ngày chép lỗi: tối đa 10 phút một lần
 const MAX_CATCHUP_DAYS = 7; // máy tắt lâu thì chỉ bù tối đa 7 ngày gần nhất
 
-function readLastSent() {
+// Trạng thái: lastSentDay = ngày cuối đã xuất/gửi; copyPending = các ngày chép sang copyTo bị lỗi, cần chép lại (file cũ chỉ có lastSentDay vẫn đọc được).
+function readState(stateFile) {
   try {
-    return JSON.parse(fs.readFileSync(REPORT_STATE_FILE, "utf8")).lastSentDay ?? null;
+    const j = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    return { lastSentDay: j.lastSentDay ?? null, copyPending: Array.isArray(j.copyPending) ? j.copyPending : [] };
   } catch {
-    return null;
+    return { lastSentDay: null, copyPending: [] };
   }
 }
 
-function writeLastSent(day) {
-  fs.writeFileSync(REPORT_STATE_FILE, JSON.stringify({ lastSentDay: day }, null, 2));
+function writeState(stateFile, st) {
+  fs.writeFileSync(stateFile, JSON.stringify(st, null, 2));
 }
 
-/** Xuất 1 ngày thành 1 file nhiều sheet và gửi tới reportTo (nếu có; không thì chỉ xuất file). Trả về kết quả xuất, hoặc null nếu ngày đó không có tin. */
-export async function sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log }) {
+/** Chép media của ngày + file báo cáo sang copyTo. Trả về true nếu xong, false nếu lỗi (chỉ cảnh báo, không chặn việc khác). */
+function copyDay({ label, file, copyTo, mediaDir, log }) {
+  try {
+    // Chép media của ngày trước để link tương đối trong file báo cáo mở được từ thư mục đích.
+    const n = copyMediaDay(label, copyTo, mediaDir);
+    if (n) log(`Đã chép ${n} tệp đính kèm của ${label} vào ${path.join(copyTo, "media", label)}`);
+    fs.mkdirSync(copyTo, { recursive: true });
+    const dest = path.join(copyTo, path.basename(file));
+    fs.copyFileSync(file, dest);
+    log(`Đã chép báo cáo ${label} vào ${dest}`);
+    return true;
+  } catch (e) {
+    log(`⚠ Không chép được báo cáo ${label} vào ${copyTo}: ${e.message}`);
+    return false;
+  }
+}
+
+/** Xuất 1 ngày thành 1 file nhiều sheet và gửi tới reportTo (nếu có; không thì chỉ xuất file). Trả về kết quả xuất (kèm `copied`: đã chép sang copyTo chưa), hoặc null nếu ngày đó không có tin. */
+export async function sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log, exportDir = EXPORT_DIR, mediaDir = MEDIA_DIR }) {
   const label = dayLabel(day);
   const fromMs = startOfDay(day, tz);
   const toMs = startOfDay(addDays(day, 1), tz);
-  const res = await exportCombined({ db: db.sqlite, groups, fromMs, toMs, tz, outDir: EXPORT_DIR, label });
+  const res = await exportCombined({ db: db.sqlite, groups, fromMs, toMs, tz, outDir: exportDir, label });
   if (!res) {
     log(`Báo cáo ${label}: không có tin nào, bỏ qua.`);
     return null;
   }
-  if (copyTo) {
-    // Chép thêm sang thư mục phụ; lỗi ở đây chỉ cảnh báo, không chặn việc gửi Zalo.
-    try {
-      // Chép media của ngày trước để link tương đối trong file báo cáo mở được từ thư mục đích.
-      const n = copyMediaDay(label, copyTo);
-      if (n) log(`Đã chép ${n} tệp đính kèm của ${label} vào ${path.join(copyTo, "media", label)}`);
-      fs.mkdirSync(copyTo, { recursive: true });
-      const dest = path.join(copyTo, path.basename(res.file));
-      fs.copyFileSync(res.file, dest);
-      log(`Đã chép báo cáo ${label} vào ${dest}`);
-    } catch (e) {
-      log(`⚠ Không chép được báo cáo ${label} vào ${copyTo}: ${e.message}`);
-    }
-  }
+  // Chép thêm sang thư mục phụ; lỗi ở đây chỉ cảnh báo (res.copied = false để lần sau chép lại), không chặn việc gửi Zalo.
+  res.copied = copyTo ? copyDay({ label, file: res.file, copyTo, mediaDir, log }) : true;
   if (!reportTo) {
     log(`Đã xuất báo cáo ${label}: ${res.count} tin, ${res.groups} nhóm, ${res.files} file đính kèm -> ${res.file}`);
     return res;
@@ -62,17 +70,21 @@ export async function sendDayReport({ api, db, groups, tz, day, reportTo, copyTo
  * Ngày nào không có tin thì bỏ qua và đánh dấu đã xử lý.
  * @returns {() => Promise<void>} hàm chạy kiểm tra ngay (gọi khi vừa kết nối)
  */
-export function startDailyReport({ api, db, groups, tz, reportTo, copyTo, keepDays = 7, log }) {
+export function startDailyReport({
+  api, db, groups, tz, reportTo, copyTo, keepDays = 7, log,
+  exportDir = EXPORT_DIR, mediaDir = MEDIA_DIR, stateFile = REPORT_STATE_FILE,
+}) {
   if (!reportTo) log('Chưa đặt "reportTo": báo cáo ngày chỉ xuất file vào exports/, không gửi Zalo.');
   let running = false;
   let lastPrune = 0;
+  let lastRetry = 0;
 
   // Dọn exports/ (giữ keepDays ngày): chỉ xoá tệp đã có bản sao ở copyTo; chạy tối đa mỗi 6 giờ, lỗi chỉ cảnh báo.
   function prune() {
     if (!copyTo || Date.now() - lastPrune < 6 * 3600_000) return;
     lastPrune = Date.now();
     try {
-      const r = pruneExports({ exportDir: EXPORT_DIR, mediaDir: MEDIA_DIR, copyTo, tz, keepDays });
+      const r = pruneExports({ exportDir, mediaDir, copyTo, tz, keepDays });
       if (r.deleted) log(`Đã dọn exports/: xoá ${r.deleted} tệp cũ hơn ${r.cutoff} (${(r.freedBytes / 1048576).toFixed(1)} MB), đã có bản sao ở ${copyTo}.`);
     } catch (e) {
       log(`⚠ Không dọn được exports/: ${e.message}`);
@@ -85,14 +97,36 @@ export function startDailyReport({ api, db, groups, tz, reportTo, copyTo, keepDa
     try {
       const today = parseDay("today", tz);
       const yesterday = addDays(today, -1);
-      const last = readLastSent();
-      let day = last ? addDays(parseDay(last, tz), 1) : yesterday;
+      const st = readState(stateFile);
+      let day = st.lastSentDay ? addDays(parseDay(st.lastSentDay, tz), 1) : yesterday;
       const earliest = addDays(yesterday, -(MAX_CATCHUP_DAYS - 1));
       if (dayLabel(day) < dayLabel(earliest)) day = earliest;
 
+      const fresh = new Set(); // ngày vừa xử lý trong lượt này: không chép lại ngay
       for (; dayLabel(day) <= dayLabel(yesterday); day = addDays(day, 1)) {
-        await sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log });
-        writeLastSent(dayLabel(day));
+        fresh.add(dayLabel(day));
+        const r = await sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log, exportDir, mediaDir });
+        st.lastSentDay = dayLabel(day);
+        if (r && !r.copied && !st.copyPending.includes(st.lastSentDay)) st.copyPending.push(st.lastSentDay);
+        writeState(stateFile, st);
+      }
+      // Chép lại các ngày trước đó chép lỗi (OneDrive tạm hết chỗ/mất mạng...): chỉ chép, không xuất/gửi lại; bỏ ngày quá 7 ngày.
+      if (copyTo && st.copyPending.length && Date.now() - lastRetry >= RETRY_COPY_MS) {
+        lastRetry = Date.now(); // thử lại tối đa 10 phút một lần để khỏi tràn log khi OneDrive còn lỗi
+        const keep = [];
+        for (const label of st.copyPending) {
+          if (fresh.has(label)) {
+            keep.push(label);
+            continue;
+          }
+          const file = path.join(exportDir, `Zalo_${label}.xlsx`);
+          if (label < dayLabel(earliest) || !fs.existsSync(file)) continue;
+          if (!copyDay({ label, file, copyTo, mediaDir, log })) keep.push(label);
+        }
+        if (keep.length !== st.copyPending.length) {
+          st.copyPending = keep;
+          writeState(stateFile, st);
+        }
       }
       prune(); // sau khi báo cáo + chép OneDrive của các ngày đã qua xong
     } catch (e) {

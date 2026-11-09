@@ -12,10 +12,10 @@ import { parseArgs } from "node:util";
 import Database from "better-sqlite3";
 import { loadConfig } from "./config.js";
 import { describe } from "./format.js";
+import { MEDIA_TYPES, MEDIA_TYPES_SQL } from "./media.js";
 import { DB_FILE, HERMES_HISTORY_DIR, HERMES_STATE_FILE } from "./paths.js";
 
 const SKIP_TYPES = ["chat.undo", "chat.delete"]; // tin hệ thống của thao tác thu hồi; trạng thái đã nằm ở cột recalled
-const MEDIA_TYPES = ["chat.photo", "share.file", "chat.video.msg"];
 const EVENT_WINDOW_MS = 7 * 86400_000; // chỉ quét sự kiện đến sau (thu hồi / tệp tải xong) của tin trong 7 ngày gần nhất
 
 export class ExportError extends Error {
@@ -130,7 +130,7 @@ export function runExport({
       SELECT m.group_id AS groupId, m.msg_id AS msgId, m.msg_type AS msgType, m.content_json AS contentJson,
              d.rel_path AS relPath, d.status AS mediaStatus
         FROM messages m JOIN media d ON d.group_id = m.group_id AND d.msg_id = m.msg_id
-       WHERE m.rowid <= ? AND m.ts >= ? AND d.status = 'ok' AND m.msg_type IN ('chat.photo','share.file','chat.video.msg')`;
+       WHERE m.rowid <= ? AND m.ts >= ? AND d.status = 'ok' AND m.msg_type IN (${MEDIA_TYPES_SQL})`;
 
     // Một giao dịch đọc để mọi truy vấn thấy cùng một ảnh chụp của DB.
     const snapshot = db.transaction(() => {
