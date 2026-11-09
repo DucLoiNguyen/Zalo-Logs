@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { MEDIA_TYPES_SQL } from "./media.js";
 import { DB_FILE } from "./paths.js";
 
 export function openDb(file = DB_FILE) {
@@ -72,7 +73,7 @@ export function openDb(file = DB_FILE) {
        FROM messages m
        LEFT JOIN groups g ON g.group_id = m.group_id
        LEFT JOIN media d ON d.group_id = m.group_id AND d.msg_id = m.msg_id
-      WHERE m.msg_type IN ('chat.photo', 'share.file', 'chat.video.msg') AND m.ts >= ?
+      WHERE m.msg_type IN (${MEDIA_TYPES_SQL}) AND m.ts >= ?
         AND (d.msg_id IS NULL OR (d.status = 'failed' AND d.attempts < ?))
       ORDER BY m.ts`
   );

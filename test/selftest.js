@@ -7,9 +7,11 @@ import ExcelJS from "exceljs";
 import { openDb } from "../src/db.js";
 import { exportCombined, exportGroup } from "../src/exporter.js";
 import { matchGroups } from "../src/groupmatch.js";
-import { mediaHref, mediaOf } from "../src/media.js";
+import { copyMediaDay, mediaHref, mediaOf } from "../src/media.js";
 import { resetExport, runExport } from "../src/exportHermes.js";
-import { addDays, describe, formatDateTime, parseDay, startOfDay } from "../src/format.js";
+import { startDailyReport } from "../src/daily.js";
+import { installFileLog } from "../src/filelog.js";
+import { addDays, dayLabel, describe, formatDateTime, parseDay, startOfDay } from "../src/format.js";
 
 const TZ = "Asia/Ho_Chi_Minh";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "zalo-logger-test-"));
@@ -201,6 +203,68 @@ assert.equal(photoRow.getCell(6).value.hyperlink, "media/2026-10-20/Test/093000_
   assert.ok(backup && fs.existsSync(backup) && !fs.existsSync(hdir) && !fs.existsSync(hstate));
   assert.equal(run().messages, 6, "xuất lại toàn bộ (không tính chat.undo)");
   hdb.close();
+}
+
+// --- start.log xoay vòng khi vượt ngưỡng (không chỉ lúc khởi động) ---
+{
+  const lf = path.join(tmp, "fl", "start.log");
+  const restore = installFileLog(lf, 200);
+  const realOut = process.stdout.write;
+  process.stdout.write = () => true; // nuốt output console trong lúc thử
+  try {
+    for (let i = 0; i < 30; i++) console.log(`dòng log số ${i} có tiếng Việt`);
+  } finally {
+    process.stdout.write = realOut;
+    restore();
+  }
+  assert.ok(fs.existsSync(`${lf}.1`), "phải có bản .1 sau khi vượt ngưỡng");
+  assert.ok(fs.statSync(lf).size <= 200 && fs.statSync(`${lf}.1`).size <= 200, "mỗi file không vượt ngưỡng");
+  assert.ok(fs.readFileSync(lf, "utf8").includes("số 29"), "dòng mới nhất nằm ở file chính");
+}
+
+// --- báo cáo ngày: chép OneDrive lỗi thì nhớ ngày đó và chép lại sau ---
+{
+  const ex = path.join(tmp, "dr-exports"), md = path.join(ex, "media"), stateFile = path.join(tmp, "dr-state.json");
+  const yesterday = addDays(parseDay("today", TZ), -1), ylabel = dayLabel(yesterday);
+  db.insertMessage({ groupId: "g1", msgId: "dr1", senderName: "An", msgType: "webchat", content: "tin hôm qua", ts: startOfDay(yesterday, TZ) + 3600_000 });
+  fs.writeFileSync(stateFile, JSON.stringify({ lastSentDay: dayLabel(addDays(yesterday, -1)) }));
+  const blocker = path.join(tmp, "dr-blocker"); // là tệp, nên mkdir bên dưới nó luôn lỗi
+  fs.writeFileSync(blocker, "x");
+  const logs = [];
+  const mk = (copyTo) => startDailyReport({ db: { sqlite: db }, groups: groupsAll, tz: TZ, reportTo: null, copyTo, log: (m) => logs.push(m), exportDir: ex, mediaDir: md, stateFile });
+  await mk(path.join(blocker, "sub"))();
+  const st1 = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  assert.equal(st1.lastSentDay, ylabel);
+  assert.deepEqual(st1.copyPending, [ylabel], "chép lỗi phải được nhớ lại");
+  assert.ok(fs.existsSync(path.join(ex, `Zalo_${ylabel}.xlsx`)) && logs.some((l) => l.includes("Không chép được")));
+  const good = path.join(tmp, "dr-onedrive");
+  await mk(good)(); // tiến trình mới (lastRetry = 0): chép lại ngày lỗi, không xuất lại
+  assert.ok(fs.existsSync(path.join(good, `Zalo_${ylabel}.xlsx`)), "đã chép lại sang thư mục hợp lệ");
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, "utf8")).copyPending, [], "chép xong thì xoá khỏi danh sách");
+  fs.writeFileSync(stateFile, JSON.stringify({ lastSentDay: ylabel })); // file trạng thái kiểu cũ vẫn đọc được
+  await mk(good)();
+  assert.ok(!logs.some((l) => l.includes("thất bại")), "không lỗi khi đọc trạng thái kiểu cũ");
+}
+
+// --- chép media sang OneDrive: bỏ tệp 0 byte, chỉ đè bản rỗng ở đích ---
+{
+  const src = path.join(tmp, "cm-src"), dst = path.join(tmp, "cm-dst");
+  const put = (f, txt) => (fs.mkdirSync(path.dirname(f), { recursive: true }), fs.writeFileSync(f, txt));
+  put(path.join(src, "2026-11-08", "N", "rong.jpg"), "");          // đang tải/mồ côi -> không chép
+  put(path.join(src, "2026-11-08", "N", "ok.jpg"), "abc");         // bình thường -> chép
+  put(path.join(src, "2026-11-08", "N", "dich-rong.jpg"), "abc");  // đích là bản rỗng -> chép đè
+  put(path.join(src, "2026-11-08", "N", "dich-khac.jpg"), "abc");  // đích có dữ liệu khác -> không đè
+  put(path.join(src, "2026-11-08", "N", "dang-tai.jpg.part"), "x"); // .part -> bỏ
+  put(path.join(dst, "media", "2026-11-08", "N", "dich-rong.jpg"), "");
+  put(path.join(dst, "media", "2026-11-08", "N", "dich-khac.jpg"), "KHAC-DAI-HON");
+  assert.equal(copyMediaDay("2026-11-08", dst, src), 2);
+  const d = (n) => path.join(dst, "media", "2026-11-08", "N", n);
+  assert.ok(!fs.existsSync(d("rong.jpg")) && !fs.existsSync(d("dang-tai.jpg.part")), "không chép tệp rỗng/.part");
+  assert.equal(fs.readFileSync(d("ok.jpg"), "utf8"), "abc");
+  assert.equal(fs.readFileSync(d("dich-rong.jpg"), "utf8"), "abc", "đè bản rỗng");
+  assert.equal(fs.readFileSync(d("dich-khac.jpg"), "utf8"), "KHAC-DAI-HON", "không đè bản có dữ liệu");
+  fs.writeFileSync(path.join(src, "2026-11-08", "N", "rong.jpg"), "xong"); // tải xong sau đó -> lượt sau chép được
+  assert.equal(copyMediaDay("2026-11-08", dst, src), 1);
 }
 
 // --- dọn exports/: giữ 7 ngày, chỉ xoá tệp đã có bản sao cùng kích thước ---

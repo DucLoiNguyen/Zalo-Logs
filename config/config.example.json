@@ -1,0 +1,8 @@
+{
+  "timezone": "Asia/Ho_Chi_Minh",
+  "groups": [
+    "Tên nhóm Zalo A (hoặc ID nhóm)",
+    "Tên nhóm Zalo B"
+  ],
+  "exportCopyDir": "C:\Users\<tên bạn>\OneDrive\<thư mục>\zalo"
+}

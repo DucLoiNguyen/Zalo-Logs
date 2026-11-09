@@ -8,6 +8,8 @@ import { dayLabel, zonedParts } from "./format.js";
 import { MEDIA_DIR } from "./paths.js";
 
 export const MEDIA_TYPES = ["chat.photo", "share.file", "chat.video.msg"];
+/** Dạng dùng trong SQL `IN (...)`: hằng cố định của mã, không phải dữ liệu người dùng. */
+export const MEDIA_TYPES_SQL = MEDIA_TYPES.map((t) => `'${t}'`).join(", ");
 
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 // Windows giới hạn đường dẫn ~260 ký tự, mà thư mục OneDrive đã dài sẵn nên cắt ngắn tên nhóm/tệp.
@@ -171,8 +173,8 @@ export function createMediaQueue({ db, tz, maxBytes, log, concurrency = 2 }) {
 }
 
 /** Chép thư mục media của 1 ngày sang thư mục phụ (OneDrive), bỏ qua tệp đã có. Trả về số tệp mới. */
-export function copyMediaDay(dayLabelStr, destRoot) {
-  const src = path.join(MEDIA_DIR, dayLabelStr);
+export function copyMediaDay(dayLabelStr, destRoot, srcRoot = MEDIA_DIR) {
+  const src = path.join(srcRoot, dayLabelStr);
   if (!fs.existsSync(src)) return 0;
   const dest = path.join(destRoot, "media", dayLabelStr);
   let copied = 0;
@@ -182,7 +184,11 @@ export function copyMediaDay(dayLabelStr, destRoot) {
       const f = path.join(from, e.name);
       const t = path.join(to, e.name);
       if (e.isDirectory()) walk(f, t);
-      else if (!e.name.endsWith(".part") && !fs.existsSync(t)) {
+      else if (!e.name.endsWith(".part")) {
+        // Tệp 0 byte là chỗ giữ của lượt tải đang chạy (hoặc mồ côi): không chép, kẻo bản rỗng nằm lại ở đích vĩnh viễn.
+        if (fs.statSync(f).size === 0) continue;
+        // Đích đã có thì giữ nguyên (không ghi đè OneDrive), trừ khi đích là bản rỗng do lần chép lỗi trước.
+        if (fs.existsSync(t) && fs.statSync(t).size > 0) continue;
         fs.copyFileSync(f, t);
         copied += 1;
       }

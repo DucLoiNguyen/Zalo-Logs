@@ -166,6 +166,8 @@ api.listener.on("connected", async () => {
   await backfill();
   const pending = mediaQueue?.addPending(Date.now() - MEDIA_RETRY_DAYS * 86400_000) ?? 0;
   if (pending) log(`Tải ${pending} tệp đính kèm chưa tải (${MEDIA_RETRY_DAYS} ngày gần nhất)`);
+  // Chờ các lượt tải đang chạy xong (tối đa 2 phút) rồi mới xuất/chép báo cáo, để không chép tệp còn dở sang OneDrive.
+  if (mediaQueue) await Promise.race([mediaQueue.idle(), sleep(120_000)]);
   checkDailyReport(); // bù báo cáo các ngày máy đã tắt lúc 0h
 });
 api.listener.on("closed", (code, reason) => {
@@ -187,6 +189,7 @@ async function shutdown() {
   try {
     api.listener.stop();
   } catch {}
+  if (mediaQueue) await Promise.race([mediaQueue.idle(), sleep(5_000)]); // cho tệp đang tải ghi xong (tối đa 5 giây)
   await db.close();
   process.exit(0);
 }

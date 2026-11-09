@@ -4,3 +4,7 @@ exports/
 *.log
 .env
 hermes-ticket/config/
+CLAUDE.local.md
+__pycache__/
+*.pyc
+config/config.json
