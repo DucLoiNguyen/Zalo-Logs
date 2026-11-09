@@ -6,7 +6,8 @@ import { ThreadType } from "zca-js";
 import { exportCombined } from "./exporter.js";
 import { addDays, dayLabel, parseDay, startOfDay } from "./format.js";
 import { copyMediaDay } from "./media.js";
-import { EXPORT_DIR, REPORT_STATE_FILE } from "./paths.js";
+import { EXPORT_DIR, MEDIA_DIR, REPORT_STATE_FILE } from "./paths.js";
+import { pruneExports } from "./prune.js";
 
 const MAX_CATCHUP_DAYS = 7; // máy tắt lâu thì chỉ bù tối đa 7 ngày gần nhất
 
@@ -61,9 +62,22 @@ export async function sendDayReport({ api, db, groups, tz, day, reportTo, copyTo
  * Ngày nào không có tin thì bỏ qua và đánh dấu đã xử lý.
  * @returns {() => Promise<void>} hàm chạy kiểm tra ngay (gọi khi vừa kết nối)
  */
-export function startDailyReport({ api, db, groups, tz, reportTo, copyTo, log }) {
+export function startDailyReport({ api, db, groups, tz, reportTo, copyTo, keepDays = 7, log }) {
   if (!reportTo) log('Chưa đặt "reportTo": báo cáo ngày chỉ xuất file vào exports/, không gửi Zalo.');
   let running = false;
+  let lastPrune = 0;
+
+  // Dọn exports/ (giữ keepDays ngày): chỉ xoá tệp đã có bản sao ở copyTo; chạy tối đa mỗi 6 giờ, lỗi chỉ cảnh báo.
+  function prune() {
+    if (!copyTo || Date.now() - lastPrune < 6 * 3600_000) return;
+    lastPrune = Date.now();
+    try {
+      const r = pruneExports({ exportDir: EXPORT_DIR, mediaDir: MEDIA_DIR, copyTo, tz, keepDays });
+      if (r.deleted) log(`Đã dọn exports/: xoá ${r.deleted} tệp cũ hơn ${r.cutoff} (${(r.freedBytes / 1048576).toFixed(1)} MB), đã có bản sao ở ${copyTo}.`);
+    } catch (e) {
+      log(`⚠ Không dọn được exports/: ${e.message}`);
+    }
+  }
 
   async function check() {
     if (running) return;
@@ -80,6 +94,7 @@ export function startDailyReport({ api, db, groups, tz, reportTo, copyTo, log })
         await sendDayReport({ api, db, groups, tz, day, reportTo, copyTo, log });
         writeLastSent(dayLabel(day));
       }
+      prune(); // sau khi báo cáo + chép OneDrive của các ngày đã qua xong
     } catch (e) {
       // Không đánh dấu đã gửi: phút sau (hoặc lần chạy sau) sẽ thử lại.
       log(`⚠ Gửi báo cáo ngày thất bại, sẽ thử lại: ${e.message}`);

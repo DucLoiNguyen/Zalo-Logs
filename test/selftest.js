@@ -203,6 +203,35 @@ assert.equal(photoRow.getCell(6).value.hyperlink, "media/2026-10-20/Test/093000_
   hdb.close();
 }
 
+// --- dọn exports/: giữ 7 ngày, chỉ xoá tệp đã có bản sao cùng kích thước ---
+{
+  const { pruneExports } = await import("../src/prune.js");
+  const ex = path.join(tmp, "pr-exports"), md = path.join(ex, "media"), bk = path.join(tmp, "pr-backup");
+  const put = (f, n) => (fs.mkdirSync(path.dirname(f), { recursive: true }), fs.writeFileSync(f, "x".repeat(n)));
+  const now = Date.UTC(2026, 10, 9, 5); // 09/11/2026 12:00 giờ VN -> giữ từ 03/11
+  put(path.join(ex, "Zalo_2026-11-01.xlsx"), 10); put(path.join(bk, "Zalo_2026-11-01.xlsx"), 10); // có bản sao -> xoá
+  put(path.join(ex, "Zalo_2026-10-31.xlsx"), 10); put(path.join(bk, "Zalo_2026-10-31.xlsx"), 99); // khác kích thước -> giữ
+  put(path.join(ex, "Zalo_2026-10-30.xlsx"), 10);                                                  // chưa sao lưu -> giữ
+  put(path.join(ex, "Zalo_2026-11-05.xlsx"), 10);                                                  // trong 7 ngày -> giữ
+  put(path.join(md, "2026-11-01", "N", "a.jpg"), 5); put(path.join(bk, "media", "2026-11-01", "N", "a.jpg"), 5);
+  put(path.join(md, "2026-11-01", "N", "b.jpg"), 5);                                               // chưa sao lưu -> giữ
+  put(path.join(md, "2026-10-29", "N", "c.jpg"), 5); put(path.join(bk, "media", "2026-10-29", "N", "c.jpg"), 5);
+  put(path.join(md, "2026-11-08", "N", "d.jpg"), 5);                                               // mới -> giữ
+  const o = { exportDir: ex, mediaDir: md, copyTo: bk, tz: "Asia/Ho_Chi_Minh", now };
+  assert.equal(pruneExports({ ...o, dryRun: true }).deleted, 3, "thử khô đếm đúng");
+  assert.ok(fs.existsSync(path.join(ex, "Zalo_2026-11-01.xlsx")), "thử khô không xoá");
+  const r = pruneExports(o);
+  assert.deepEqual([r.cutoff, r.deleted, r.kept], ["2026-11-03", 3, 3]);
+  assert.ok(!fs.existsSync(path.join(ex, "Zalo_2026-11-01.xlsx")) && !fs.existsSync(path.join(md, "2026-10-29")));
+  for (const f of ["Zalo_2026-10-31.xlsx", "Zalo_2026-10-30.xlsx", "Zalo_2026-11-05.xlsx"]) assert.ok(fs.existsSync(path.join(ex, f)), f);
+  assert.ok(fs.existsSync(path.join(md, "2026-11-01", "N", "b.jpg")) && fs.existsSync(path.join(md, "2026-11-08", "N", "d.jpg")));
+  assert.equal(fs.statSync(path.join(bk, "Zalo_2026-10-31.xlsx")).size, 99, "không ghi đè bản sao khác kích thước");
+  const r2 = pruneExports({ ...o, backupFirst: true }); // chép tệp chưa có bản sao rồi xoá; vẫn không ghi đè
+  assert.deepEqual([r2.deleted, r2.backedUp, r2.kept], [2, 2, 1]);
+  assert.ok(fs.existsSync(path.join(bk, "Zalo_2026-10-30.xlsx")) && fs.existsSync(path.join(bk, "media", "2026-11-01", "N", "b.jpg")));
+  assert.equal(pruneExports({ ...o, copyTo: null }).deleted, 0, "không có nơi sao lưu thì không xoá");
+}
+
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log("✔ Tất cả kiểm tra đều đạt");

@@ -140,7 +140,7 @@ api.listener.on("old_messages", (msgs, type) => {
 });
 
 // 4) Mỗi ngày sau 0h: xuất 1 file Excel của ngày trước và gửi tới reportTo.
-const checkDailyReport = startDailyReport({ api, db, groups: matched, tz: config.timezone, reportTo: config.reportTo, copyTo: config.exportCopyDir, log });
+const checkDailyReport = startDailyReport({ api, db, groups: matched, tz: config.timezone, reportTo: config.reportTo, copyTo: config.exportCopyDir, keepDays: config.keepExportDays, log });
 
 // Watchdog: kết nối đóng mà không nối lại được trong WATCHDOG_MS thì thoát với mã lỗi,
 // để Task Scheduler (restart on failure) khởi động lại tiến trình thay vì "sống mà không nhận tin".

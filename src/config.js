@@ -24,10 +24,12 @@ export function loadConfig() {
   // downloadMedia: tải ảnh/file/video về exports/media (mặc định bật); mediaMaxMB: bỏ qua tệp lớn hơn mức này.
   const downloadMedia = raw.downloadMedia !== false;
   const mediaMaxMB = Number(raw.mediaMaxMB) > 0 ? Number(raw.mediaMaxMB) : 100;
+  // keepExportDays: exports/ chỉ giữ ngần này ngày gần nhất (đã có bản sao ở exportCopyDir mới xoá; cần exportCopyDir).
+  const keepExportDays = Number.isInteger(raw.keepExportDays) && raw.keepExportDays >= 1 ? raw.keepExportDays : 7;
   // hermesHistoryDir: thư mục JSONL cho Hermes (npm run export-hermes). Đường dẫn tương đối tính từ thư mục dự án.
   const hermesHistoryDir =
     typeof raw.hermesHistoryDir === "string" && raw.hermesHistoryDir.trim()
       ? path.resolve(ROOT, raw.hermesHistoryDir.trim())
       : HERMES_HISTORY_DIR;
-  return { timezone, groups, reportTo, exportCopyDir, downloadMedia, mediaMaxMB, hermesHistoryDir };
+  return { timezone, groups, reportTo, exportCopyDir, downloadMedia, mediaMaxMB, keepExportDays, hermesHistoryDir };
 }

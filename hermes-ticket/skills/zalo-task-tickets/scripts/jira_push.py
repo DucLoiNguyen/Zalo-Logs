@@ -293,7 +293,10 @@ def main() -> int:
             tickets[r["key"]] = r
 
     cache: dict = {}
-    created = commented = errors = 0
+    created = commented = errors = waiting = 0
+    # Chế độ dự phòng: Hermes chỉ tạo task sau `backup_grace_minutes` kể từ tin neo nếu trên Jira chưa có task cho tin đó
+    # (pilot của huantd tạo trước). 0 hoặc thiếu = tạo ngay.
+    grace = timedelta(minutes=float(jc.get("backup_grace_minutes") or 0))
     for key, t in tickets.items():
         led = ledger.get(key)
         if not led or led.get("status", "open") != "open":
@@ -302,6 +305,9 @@ def main() -> int:
             if start and anchor_time(t, led, cache, int(slas.get(t.get("priority") or "medium", 30))) < start:
                 continue  # trước mốc bắt đầu đẩy Jira
             if created >= a.limit:
+                continue
+            if grace and datetime.now(TZ) < anchor_time(t, led, cache, 30) + grace:
+                waiting += 1  # chế độ dự phòng: chờ huantd/pilot tạo trước, hết thời gian chờ mà chưa có mới tạo thay
                 continue
             cat = cats.get(t.get("category") or "", {})
             rtype = cat.get("jsm_request_type") or cat.get("label")
@@ -400,8 +406,8 @@ def main() -> int:
                 else:
                     print(f"LỖI đính kèm {f['name']} vào {state[key]['issue']} ({code}), sẽ thử lại")
                     errors += 1
-        # comment cho cập nhật của khách (chỉ với ticket đã đẩy)
-        if key in state and not a.dry_run:
+        # comment cho cập nhật của khách (chỉ với task do Hermes tạo; task có sẵn của người khác thì không đụng vào)
+        if key in state and not a.dry_run and not state[key].get("existing"):
             done = state[key]["comments"]
             for note in updates.get(key, [])[done:]:
                 if mode == "task":
@@ -416,6 +422,8 @@ def main() -> int:
                 state[key]["comments"] += 1
                 save()
                 commented += 1
+    if waiting and a.dry_run:
+        print(f"[dry-run] {waiting} ticket đang chờ (dự phòng, chưa hết {int(grace.total_seconds() // 60)} phút kể từ tin neo)")
     if created or commented or errors:
         print(f"Jira: tạo {created}, comment {commented}, lỗi {errors}")
     return 1 if errors else 0

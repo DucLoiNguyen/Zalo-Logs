@@ -15,6 +15,7 @@
     "export": "node src/export.js",
     "sync-mongo": "node src/syncMongo.js",
     "send-report": "node src/sendReport.js",
+    "prune-exports": "node src/pruneExports.js",
     "download-media": "node src/downloadMedia.js",
     "export-hermes": "node src/exportHermes.js",
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File stop-logger.ps1",
