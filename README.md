@@ -48,6 +48,16 @@ Muốn tải bù tin cũ hơn (tuỳ chọn): `npm run download-media` (tất c�
 
 Trong file Excel, cột "Tệp đính kèm" là link tương đối `media/...`. Mở được ở máy khác nếu file báo cáo và thư mục `media` nằm cạnh nhau (báo cáo 0h chép cả hai sang `exportCopyDir`). Ảnh/file chứa dữ liệu của nhiều người: đừng chia sẻ thư mục `media` ra ngoài.
 
+## Xuất cho Hermes
+
+`npm run export-hermes` đọc SQLite ở chế độ chỉ đọc và nối tin mới vào `data/hermes-history/<group_id>.jsonl` (đổi thư mục bằng `hermesHistoryDir` trong `config/config.json`). Lệnh chạy lại được bất kỳ lúc nào, tin đã xuất không bị ghi lại. Kèm theo là sự kiện thu hồi và sự kiện tệp tải xong của tin đã xuất trước đó.
+
+- `--dry-run`: chỉ đếm, không ghi gì. `--quiet`: một dòng tổng kết.
+- `--reset --yes`: đổi tên thư mục JSONL cũ thành `hermes-history.bak-<thời gian>`, xoá checkpoint và xuất lại từ đầu.
+- Thoát mã 2 nếu DB có vẻ bị khôi phục/VACUUM (rowid nhỏ hơn checkpoint); khi đó không tự xuất lại.
+
+Chi tiết kế hoạch nối với Hermes ở `hermes-ticket/TRIEN-KHAI.md`.
+
 ## Xuất Excel
 
 Không cần đăng nhập Zalo, đọc thẳng từ DB:

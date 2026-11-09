@@ -125,6 +125,14 @@ def main() -> int:
     if not a.group:
         ap.error("cần --group hoặc --list-groups")
     if a.advance_to_line is not None:
+        # Chốt chặn: agent từng truyền nhầm message_id (số rất lớn) làm số dòng, khiến nhóm kẹt vĩnh viễn.
+        path = a.history_dir / f"{a.group}.jsonl"
+        total = len(load_lines(path)) if path.exists() else 0
+        cur = read_cursor(a.state_dir, a.group)
+        if not (cur <= a.advance_to_line <= total):
+            print(f"LỖI: --advance-to-line {a.advance_to_line} không hợp lệ (phải nằm trong {cur}..{total}). "
+                  "Dùng đúng số sau 'LAST_LINE=' trong kết quả zalo_window.py, KHÔNG dùng message_id.", file=sys.stderr)
+            return 2
         write_cursor(a.state_dir, a.group, a.advance_to_line)
         print(f"OK: checkpoint {a.group} = dòng {a.advance_to_line}")
         return 0

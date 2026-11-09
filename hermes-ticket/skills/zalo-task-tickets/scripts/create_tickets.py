@@ -76,7 +76,7 @@ def load_ledger(state: Path) -> dict:
     led: dict[str, dict] = {}
     for r in load_jsonl(state / "ledger.jsonl"):
         cur = led.setdefault(r["key"], {"seen_ids": []})
-        seen = set(cur["seen_ids"]) | set(r.get("seen_ids", []))
+        seen = {str(i) for i in cur["seen_ids"]} | {str(i) for i in r.get("seen_ids", [])}  # model đôi khi ghi số nguyên
         cur.update(r)
         cur["seen_ids"] = sorted(seen)
     return led
@@ -136,7 +136,7 @@ def body_of(t: dict, r: dict, key: str) -> str:
         "", f"> {t.get('quote', '')}", "",
         *([f"**Tệp đính kèm:** " + "; ".join(f"{x.get('name')} ({x.get('path') or 'chưa tải'})" for x in t["attachments"])]
           if t.get("attachments") else []),
-        f"Nguồn: Zalo `{t['group_id']}`, tin {', '.join(t.get('source_message_ids') or [t['request_message_id']])}",
+        f"Nguồn: Zalo `{t['group_id']}`, tin {', '.join(map(str, t.get('source_message_ids') or [t['request_message_id']]))}",
         f"<!-- zalo-ticket-key: {key} -->",
     ])
 
@@ -187,6 +187,12 @@ def main() -> int:
     out = []
 
     for t in tasks:
+        # model đôi khi ghi message_id dạng số nguyên: chuẩn hoá về chuỗi trước khi so sánh/lưu/xuất
+        for k in ("request_message_id", "group_id"):
+            if t.get(k) is not None:
+                t[k] = str(t[k])
+        if t.get("source_message_ids"):
+            t["source_message_ids"] = [str(i) for i in t["source_message_ids"]]
         errs = validate(t, cfg)
         if errs:
             out.append({"title": t.get("title"), "status": "invalid", "errors": errs})
@@ -194,6 +200,9 @@ def main() -> int:
         key = key_of(t)
         ids = sorted(set(t.get("source_message_ids") or []) | {t["request_message_id"]})
         prev = ledger.get(key)
+        if prev and prev.get("status") == "not_ours":  # yêu cầu của đối thủ (Misa), đã loại: đừng mở lại
+            out.append({"key": key, "title": t["title"], "status": "skipped_not_ours"})
+            continue
         new_ids = [i for i in ids if not prev or i not in prev["seen_ids"]]
         if prev and not new_ids:
             out.append({"key": key, "title": t["title"], "status": "duplicate", "url": prev.get("url")})

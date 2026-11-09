@@ -8,6 +8,7 @@ import { openDb } from "../src/db.js";
 import { exportCombined, exportGroup } from "../src/exporter.js";
 import { matchGroups } from "../src/groupmatch.js";
 import { mediaHref, mediaOf } from "../src/media.js";
+import { resetExport, runExport } from "../src/exportHermes.js";
 import { addDays, describe, formatDateTime, parseDay, startOfDay } from "../src/format.js";
 
 const TZ = "Asia/Ho_Chi_Minh";
@@ -130,6 +131,77 @@ const wm = new ExcelJS.Workbook();
 await wm.xlsx.readFile(withMedia.file);
 const photoRow = wm.getWorksheet("Tin nhắn").getRows(2, 20).find((r) => r.getCell(4).value === "Hình ảnh" && r.getCell(6).value);
 assert.equal(photoRow.getCell(6).value.hyperlink, "media/2026-10-20/Test/093000_anh.jpg");
+
+// 9) Cầu nối Hermes: checkpoint theo rowid, sự kiện đến sau, chỉ đọc
+{
+  const hdb = openDb(path.join(tmp, "hermes.db")); // giữ mở (ghi) trong lúc xuất, như start.js đang chạy
+  const hdir = path.join(tmp, "hermes-history");
+  const hstate = path.join(tmp, "hermes-state.json");
+  const run = (o = {}) => runExport({ dbFile: path.join(tmp, "hermes.db"), outDir: hdir, stateFile: hstate, ...o });
+  const lines = (g) => fs.readFileSync(path.join(hdir, `${g}.jsonl`), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const hm = (id, g, type, content, ts, extra = {}) =>
+    hdb.insertMessage({ groupId: g, msgId: id, senderId: "u1", senderName: "An", msgType: type, content, ts, ...extra });
+
+  hdb.upsertGroup("h1", "Nhóm H1");
+  hdb.upsertGroup("h2", "Nhóm H2");
+  const nowMs = Date.now();
+  hm("a1", "h1", "webchat", "xin chào", nowMs - 5000);
+  hm("a2", "h1", "share.file", { title: "ds.xlsx" }, nowMs - 4000);
+  hm("a3", "h1", "chat.photo", { title: "chú thích", href: "https://p.example/a.jpg" }, nowMs - 3000);
+  hm("a4", "h1", "chat.undo", { globalMsgId: "x" }, nowMs - 2000); // tin hệ thống: không xuất
+  hm("b1", "h2", "webchat", "nhóm hai", nowMs - 1000);
+  hdb.markRecalled("h1", "a1"); // đã thu hồi TRƯỚC khi xuất lần đầu: dòng tin mang recalled:true, không phát sự kiện
+
+  assert.equal(run({ dryRun: true }).messages, 4);
+  assert.equal(fs.existsSync(hdir), false, "dry-run không ghi gì");
+
+  const r1 = run();
+  assert.deepEqual([r1.messages, r1.recalls, r1.attachments, r1.groups], [4, 0, 0, 2]);
+  assert.equal(lines("h1").length, 3);
+  assert.equal(lines("h1")[0].recalled, true);
+  assert.equal(lines("h1")[0].text, "xin chào", "thu hồi vẫn giữ nội dung gốc");
+  assert.deepEqual(lines("h1")[1].attachment, { name: "ds.xlsx", path: null });
+  assert.equal(lines("h1")[2].attachment.name, "chú thích", "ảnh chưa tải: dùng title làm tên");
+  assert.equal(lines("h1")[0].timestamp, (nowMs - 5000) / 1000);
+  assert.deepEqual([run().messages, run().recalls], [0, 0], "chạy lần hai không ghi thêm");
+
+  // Tin bù (ts cũ) được chèn SAU: rowid mới nên vẫn được xuất
+  hm("a0", "h1", "webchat", "tin bù từ hôm qua", nowMs - 86400_000);
+  assert.equal(run().messages, 1);
+  assert.equal(lines("h1").at(-1).message_id, "a0");
+
+  // Thu hồi đến sau -> đúng một sự kiện
+  hdb.markRecalled("h1", "a0");
+  assert.deepEqual([run().recalls, run().recalls], [1, 0]);
+  assert.deepEqual(lines("h1").at(-1), { type: "recall", message_id: "a0" });
+
+  // Tệp tải xong sau -> đúng một sự kiện attachment
+  hdb.setMedia({ groupId: "h1", msgId: "a2", relPath: "2026-11-04/Nhom/101010_ds.xlsx", status: "ok", size: 9 });
+  assert.deepEqual([run().attachments, run().attachments], [1, 0]);
+  assert.deepEqual(lines("h1").at(-1), {
+    type: "attachment",
+    message_id: "a2",
+    attachment: { name: "ds.xlsx", path: "media/2026-11-04/Nhom/101010_ds.xlsx" },
+  });
+
+  // Tin mới đã có sẵn tệp lúc xuất -> path có ngay, không phát sự kiện
+  hm("c1", "h2", "chat.photo", { title: "", href: "https://p.example/c.jpg" }, nowMs);
+  hdb.setMedia({ groupId: "h2", msgId: "c1", relPath: "2026-11-04/Nhom/090000_anh.jpg", status: "ok", size: 3 });
+  const r6 = run();
+  assert.deepEqual([r6.messages, r6.attachments], [1, 0]);
+  assert.deepEqual(lines("h2").at(-1).attachment, { name: "090000_anh.jpg", path: "media/2026-11-04/Nhom/090000_anh.jpg" });
+
+  // DB lùi so với checkpoint (VACUUM/khôi phục) -> báo lỗi mã 2, không tự xuất lại
+  fs.writeFileSync(hstate, JSON.stringify({ lastRowid: 9999 }));
+  assert.throws(() => run(), (e) => e.exitCode === 2);
+  fs.writeFileSync(hstate, JSON.stringify({ lastRowid: 0 }));
+
+  // --reset đổi tên thư mục cũ và xuất lại từ đầu
+  const { backup } = resetExport({ outDir: hdir, stateFile: hstate });
+  assert.ok(backup && fs.existsSync(backup) && !fs.existsSync(hdir) && !fs.existsSync(hstate));
+  assert.equal(run().messages, 6, "xuất lại toàn bộ (không tính chat.undo)");
+  hdb.close();
+}
 
 db.close();
 fs.rmSync(tmp, { recursive: true, force: true });

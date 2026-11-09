@@ -30,7 +30,11 @@ PRIO = {"urgent": "Highest", "high": "High", "medium": "Medium", "low": "Low"}
 
 
 def jsonl(p: Path) -> list[dict]:
-    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
+    rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
+    for r in rows:  # model đôi khi lưu message_id dạng số nguyên
+        if isinstance(r.get("source_message_ids"), list):
+            r["source_message_ids"] = [str(i) for i in r["source_message_ids"]]
+    return rows
 
 
 def jira_date(s: str | None) -> str:
@@ -75,7 +79,7 @@ def main() -> None:
             t["description"], "",
             f"Khách hàng: {t.get('customer_name') or ''} (Zalo {t.get('customer_zalo_id') or '?'})",
             f"Trích dẫn: \"{t.get('quote', '')}\"",
-            f"Nguồn: Zalo {t['group_id']}, tin {', '.join(t.get('source_message_ids') or [])}",
+            f"Nguồn: Zalo {t['group_id']}, tin {', '.join(map(str, t.get('source_message_ids') or []))}",
             f"zalo-ticket-key: {key}",
         ])
         labels = ["zalo", t.get("category") or "khac"] + (["noi-bo"] if t.get("kind") == "internal" else [])

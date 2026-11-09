@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { CONFIG_FILE } from "./paths.js";
+import path from "node:path";
+import { CONFIG_FILE, HERMES_HISTORY_DIR, ROOT } from "./paths.js";
 
 export function loadConfig() {
   let raw;
@@ -23,5 +24,10 @@ export function loadConfig() {
   // downloadMedia: tải ảnh/file/video về exports/media (mặc định bật); mediaMaxMB: bỏ qua tệp lớn hơn mức này.
   const downloadMedia = raw.downloadMedia !== false;
   const mediaMaxMB = Number(raw.mediaMaxMB) > 0 ? Number(raw.mediaMaxMB) : 100;
-  return { timezone, groups, reportTo, exportCopyDir, downloadMedia, mediaMaxMB };
+  // hermesHistoryDir: thư mục JSONL cho Hermes (npm run export-hermes). Đường dẫn tương đối tính từ thư mục dự án.
+  const hermesHistoryDir =
+    typeof raw.hermesHistoryDir === "string" && raw.hermesHistoryDir.trim()
+      ? path.resolve(ROOT, raw.hermesHistoryDir.trim())
+      : HERMES_HISTORY_DIR;
+  return { timezone, groups, reportTo, exportCopyDir, downloadMedia, mediaMaxMB, hermesHistoryDir };
 }

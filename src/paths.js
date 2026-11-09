@@ -11,6 +11,9 @@ export const EXPORT_DIR = path.join(ROOT, "exports");
 // Ảnh/file/video tải về: exports/media/<ngày>/<nhóm>/... (nằm cạnh file báo cáo để link tương đối trong Excel dùng được
 // cả ở exports/ lẫn ở thư mục OneDrive đã chép sang).
 export const MEDIA_DIR = path.join(EXPORT_DIR, "media");
+// Cầu nối sang Hermes (export-hermes): JSONL theo nhóm + checkpoint (rowid cuối đã xuất).
+export const HERMES_HISTORY_DIR = path.join(DATA_DIR, "hermes-history");
+export const HERMES_STATE_FILE = path.join(DATA_DIR, "hermes-export-state.json");
 export const ENV_FILE = path.join(ROOT, ".env");
 export const REPORT_STATE_FILE = path.join(DATA_DIR, "report-state.json");
 export const LOG_FILE = path.join(DATA_DIR, "start.log");
