@@ -59,7 +59,7 @@ Luồng chính: `start.js` → `store.js` (SQLite + Atlas) → `daily.js` / `med
 - Media: chưa chạy `download-media` cho tin cũ (tuỳ chọn); chưa thử video thật; chưa rõ thời hạn link Zalo; chưa mở xlsx bằng Excel thật để xem hyperlink tương đối.
 - Dọn `exports/`: 11 báo cáo xlsx cũ khác kích thước với bản trên OneDrive (chưa rõ bản nào đúng) nên chưa xoá; chờ quyết định có chạy `--backup` không; chưa quan sát lần dọn tự động đầu tiên (sau 0h ngày 10/11).
 - Backfill: chưa xác minh thứ tự trang của `requestOldMessages` nên chưa dừng sớm khi gặp tin đã có.
-- `hermes-ticket/config/cs_config.json` (tên + ID Zalo nhân viên) đã gỡ khỏi chỉ mục git (file trên đĩa giữ nguyên), nhưng vẫn còn trong lịch sử đã push lên GitHub (`e2692c5`); xoá khỏi lịch sử (filter-repo + force push, không hoàn tác được) chờ quyết định.
+- Lịch sử git đã viết lại ngày 09/11 để xoá `hermes-ticket/config/cs_config.json` (mã commit đổi hết; clone khác phải clone lại). Còn bản sao lưu cũ `D:\zalo-logs-backup-2026-11-09.bundle` chứa dữ liệu nhạy cảm: xoá khi không cần nữa. `TRIEN-KHAI.md` vẫn ghi ID của người nhận ticket mặc định (của chính chủ repo).
 - Hermes: nhận diện nhân viên Misa chỉ theo tên; ticket "Thu quỹ phòng" (nội bộ) và ticket trùng THPT Hướng Hóa chưa xử lý; ticket quá hạn chưa có người nhận; `unit`/`platform` do model điền có thể sai.
 - Hermes: quyết định có tạo ticket cho yêu cầu đã xong trong chat (`resolved_in_chat`) không; chưa kiểm tra chất lượng ticket so với tin gốc.
 - Jira: đang BẬT chế độ dự phòng (chờ 20 phút, chỉnh được); chưa có task nào do Hermes tạo thật; accountId mới điền cho 1 nhân viên; có thể tạo trùng nếu chỉ mục Jira chậm.

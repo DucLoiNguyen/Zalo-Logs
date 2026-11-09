@@ -10,7 +10,7 @@ Ngữ cảnh cho phần Hermes của dự án. Chi tiết riêng của máy (đ�
 
 ## Thành phần
 - `skills/zalo-task-tickets/`: skill + script Python (`zalo_window.py`, `triage_prepare.py`, `apply_group.py`, `create_tickets.py`, `export_jsm.py`, `jira_push.py`, ...); `SKILL.md` dùng `$HERMES_HOME/...` (profile không dùng `~/.hermes/skills`).
-- `config/cs_config.json`: nhân viên, nhóm, loại yêu cầu, SLA 30 phút, khối `jira`. Có ID/tên thật; nằm trong `.gitignore` và đã gỡ khỏi chỉ mục git, nhưng vẫn còn trong lịch sử đã push (commit `e2692c5`).
+- `config/cs_config.json`: nhân viên, nhóm, loại yêu cầu, SLA 30 phút, khối `jira`. Có ID/tên thật; nằm trong `.gitignore`, đã gỡ khỏi git và đã xoá khỏi lịch sử GitHub (09/11).
 - `scripts/`: shell cho cron (`export-hermes.sh`, `triage-prep.sh`, `jira-push.sh`, `sync-tickets-onedrive.sh`), `jira_toggle.py`, `set_start_cursors.py`.
 - Bản chạy thật nằm ở profile `ticket` của Hermes. **Sửa file trong repo xong phải chép sang profile** (skills, scripts, `cs_config.json`).
 - Tài liệu triển khai: `TRIEN-KHAI.md`.
