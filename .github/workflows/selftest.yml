@@ -14,5 +14,5 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts # better-sqlite3 13 đã đóng gói sẵn prebuilds, tránh node-gyp biên dịch lại
       - run: npm run selftest
