@@ -35,4 +35,4 @@ export TRIAGE_LLM_MODEL="${TRIAGE_LLM_MODEL:-${TRIAGE_SHADOW_MODEL:-gemini/gemin
 export TRIAGE_INTERNAL_MODEL="${TRIAGE_INTERNAL_MODEL:-cc/claude-haiku-4-5-20251001}"
 export TRIAGE_NOTES_READ="${TRIAGE_NOTES_READ:-0}"
 export PYTHONDONTWRITEBYTECODE=1
-exec python3 "$SKILL/scripts/triage_llm.py"
+exec python3 "$SKILL/scripts/triage_llm.py" "$@"   # chạy tay: bash triage-llm.sh --dry-run [--group <id>]
