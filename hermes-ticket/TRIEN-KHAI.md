@@ -204,3 +204,47 @@ Chưa làm trong đợt này. Ghi lại để khỏi quên:
 - Không chạy `hermes update`.
 - Không commit dữ liệu thật: `data/`, `exports/`, `hermes-ticket/config/`.
 - Không tự tạo task Windows hay sửa Task Scheduler khi chưa hỏi người dùng.
+
+## 6. Bật shadow mode (`triage_llm.py` chạy song song, không thay job cũ)
+
+Shadow ghi vào state riêng `zalo-tickets-shadow` (không có `jira_state.json`, `jira.enabled=false`, không gọi `jira_push`), dùng skill riêng `skills-shadow/`, không đụng job `zalo-ticket-triage` / `zalo-ticket-jira` / state thật. Làm trong WSL (`wsl -d Ubuntu-24.04`), người dùng tự chạy.
+
+**1. Biến trong `~/.hermes/profiles/ticket/.env`** (thêm các dòng chưa có; `TRIAGE_LLM_API_KEY` và `TRIAGE_LLM_BASE_URL` đã có từ trước, không ghi giá trị vào tài liệu):
+
+```
+TRIAGE_LLM_MODEL=gemini/gemini-3.5-flash-lite
+TRIAGE_INTERNAL_MODEL=cc/claude-haiku-4-5-20251001
+TRIAGE_NOTES_READ=0
+```
+
+`triage-llm.sh` chỉ nạp đúng 5 biến này từ `.env`; thiếu thì dùng đúng các giá trị mặc định ở trên. `TRIAGE_INTERNAL_MODEL` bắt buộc cho nhóm nội bộ (Gemini trả rỗng ở nhóm đó). `TRIAGE_NOTES_READ=0`: vẫn ghi sổ tay nhưng không đưa vào prompt.
+
+**2. Chép mã sang profile** (làm lại mỗi lần sửa skill/script; khi shadow đang chạy phải ghi ngày giờ vào `docs/WORKLOG.md`):
+
+```
+P=~/.hermes/profiles/ticket
+R=/mnt/d/zalo-logger/hermes-ticket
+mkdir -p $P/skills-shadow $P/scripts
+rm -rf $P/skills-shadow/zalo-task-tickets
+cp -r $R/skills/zalo-task-tickets $P/skills-shadow/zalo-task-tickets
+find $P/skills-shadow -name __pycache__ -prune -exec rm -rf {} +
+cp $R/scripts/triage-llm.sh $R/scripts/sync-tickets-onedrive.sh $P/scripts/ && chmod +x $P/scripts/*.sh
+```
+
+State shadow dựng bằng `python3 $R/scripts/setup_shadow.py --real $P/zalo-tickets --shadow $P/zalo-tickets-shadow` (cursor = cursor thật lúc chạy; thêm `--reset` để dựng lại từ đầu; `--dry-run` để xem trước).
+
+**3. Tạo cron, lệch phút so với job cũ** (job cũ chạy các phút :03/:18/:33/:48 UTC; shadow đọc lịch sử do job cũ xuất nên chạy sau khoảng 5 phút):
+
+```
+hermes -p ticket cron create "8,23,38,53 * * * *" --name zalo-ticket-triage-shadow --script triage-llm.sh --no-agent --deliver local
+```
+
+Kiểm tra: `hermes -p ticket cron list` (thấy 4 job), chạy thử một lần `hermes -p ticket cron run <id job shadow>`, rồi xem `$P/zalo-tickets-shadow/ledger.jsonl` và `$P/zalo-tickets-shadow/export/review.csv` (tin `[Cần xem]`). Dừng: `hermes -p ticket cron pause <id>` (hoặc `cron remove <id>`); job cũ không bị ảnh hưởng.
+
+**4. So sánh theo ngày** (ít nhất sau một ngày làm việc; chỉ đọc cả hai state, chỉ ghi file báo cáo):
+
+```
+python3 /mnt/d/zalo-logger/hermes-ticket/scripts/compare_shadow.py --date 2026-11-13
+```
+
+Kết quả: `data/shadow-compare-<ngày>.md` (ghép theo nhóm + khách + giờ ±10 phút; bảng chỉ có ở thật / chỉ có ở shadow / cặp khác nhau / tin cần xem). `review.csv` của shadow chỉ sang OneDrive sau khi chuyển chính thức (job OneDrive đọc state thật).

@@ -70,7 +70,8 @@ def main() -> int:
     print(f"XONG nhóm {group}: {json.dumps(count, ensure_ascii=False)}; checkpoint = {last}")
     for s in res:
         if s.get("status") in ("created", "updated"):
-            print(f"- {s['status']}: {s.get('title')} | {s.get('assignee')} | hạn {s.get('due')}")
+            tag = s["status"] + (" (đã xong trong chat)" if s.get("ledger_status") == "resolved" else "")
+            print(f"- {tag}: {s.get('title')} | {s.get('assignee')} | hạn {s.get('due')}")
         elif s.get("status") == "low_confidence":
             print(f"- low_confidence (cần người xem): {s.get('title')}")
     return 0

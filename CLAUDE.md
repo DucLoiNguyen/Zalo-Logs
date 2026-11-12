@@ -17,6 +17,7 @@ Node >= 20 (máy dev v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, `
 - Script `.ps1` chạy trên Windows (UTF-8 BOM nếu có tiếng Việt); script trong `hermes-ticket/` chạy trong WSL; sửa skill/script xong phải chép sang profile Hermes.
 - Sửa ở `src/` chỉ có hiệu lực sau khi khởi động lại tool (`npm run stop` rồi `npm run resume`).
 - Không commit/push khi chưa được người dùng đồng ý.
+- Khi cron shadow (`zalo-ticket-triage-shadow`) đang chạy: MỖI lần sửa skill/script Hermes (kể cả chép sang `skills-shadow/`) phải ghi 1 dòng vào `docs/WORKLOG.md` kèm ngày GIỜ (`YYYY-MM-DD HH:MM`) và việc đã đổi, để so sánh shadow biết kết quả từ giờ nào dùng mã nào.
 
 ## Lệnh
 - `npm run login`: đăng nhập QR, lưu `data/credentials.json`. `npm run groups [-- từ khoá]`: liệt kê nhóm.
@@ -61,9 +62,9 @@ Luồng chính: `start.js` → `store.js` (SQLite + Atlas) → `daily.js` / `med
 - Backfill: chưa xác minh thứ tự trang của `requestOldMessages` nên chưa dừng sớm khi gặp tin đã có.
 - Lịch sử git đã viết lại ngày 09/11 để xoá `hermes-ticket/config/cs_config.json` (mã commit đổi hết; clone khác phải clone lại). Còn bản sao lưu cũ `D:\zalo-logs-backup-2026-11-09.bundle` chứa dữ liệu nhạy cảm: xoá khi không cần nữa. `TRIEN-KHAI.md` vẫn ghi ID của người nhận ticket mặc định (của chính chủ repo).
 - Hermes: nhận diện nhân viên Misa chỉ theo tên; ticket "Thu quỹ phòng" (nội bộ) và ticket trùng THPT Hướng Hóa chưa xử lý; ticket quá hạn chưa có người nhận; `unit`/`platform` do model điền có thể sai.
-- Hermes: quyết định có tạo ticket cho yêu cầu đã xong trong chat (`resolved_in_chat`) không; chưa kiểm tra chất lượng ticket so với tin gốc.
+- Hermes: `triage_llm.py` (thay agent, 2 bước + kiểm tra phủ) chỉ mới chạy thử/shadow, chưa thay job cũ; chờ chấm tay `data/triage-llm-label.md` và so sánh `compare_shadow.py`. `resolved_in_chat` đã chốt: vẫn tạo ticket trạng thái `resolved` (mã mới nằm ở nhánh `triage-llm` + skill shadow, chưa chép sang skill của job cũ). Chờ duyệt đóng 16 ticket mở quá 5 ngày (`mark_ticket.py --auto-close-days --dry-run --list`; 1 ticket là yêu cầu Misa, nên `not_ours`).
 - Jira: đang BẬT chế độ dự phòng (chờ 20 phút, chỉnh được); chưa có task nào do Hermes tạo thật; accountId mới điền cho 1 nhân viên; có thể tạo trùng nếu chỉ mục Jira chậm.
-- Mã mới chưa commit (nhiều file); chưa theo dõi đủ 5 ngày làm việc.
+- Mã triage_llm/shadow đã commit trên nhánh `triage-llm`, chưa merge, chưa push; chưa theo dõi đủ 5 ngày làm việc.
 
 ## Tài liệu chi tiết
 - `hermes-ticket/CLAUDE.md`: Hermes, cron, Jira. `hermes-ticket/TRIEN-KHAI.md`: triển khai. `docs/WORKLOG.md`: nhật ký làm việc.

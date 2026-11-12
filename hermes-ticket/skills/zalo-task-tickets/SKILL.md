@@ -33,7 +33,11 @@ Yêu cầu phổ biến của Clex: gửi danh sách đăng ký tạo tài kho�
 
 `$SKILL` = `$HERMES_HOME/skills/zalo-task-tickets` (profile `ticket`: `/home/posei/.hermes/profiles/ticket/skills/zalo-task-tickets`). Cấu hình đặt ở `$HERMES_HOME/zalo-tickets/cs_config.json`, gồm danh sách nhân viên, các loại yêu cầu (category) kèm người phụ trách và ưu tiên mặc định, và SLA.
 
-## Chế độ cron (rút gọn, ít lần gọi model)
+## Chế độ cron bằng `triage_llm.py` (không agent)
+
+Thay vòng lặp agent bên dưới, `scripts/triage_llm.py` (cron `--no-agent`, chạy bằng `triage-llm.sh`) tự làm toàn bộ: lấy cửa sổ tin, gọi model qua 9router (mặc định 2 bước: phân loại từng tin khách rồi điền chi tiết, `prompts/triage_system.md` và `prompts/triage_classify.md`), kiểm tra phủ bằng mã (tin khách có 📎/SĐT/email/từ khoá yêu cầu mà chưa có ticket thì hỏi lại, rồi hỏi model dự phòng, cuối cùng tạo ticket `[Cần xem]` confidence 0.4 vào `review.jsonl`), rồi `apply_group.py`. Quy tắc phân loại ở các mục dưới vẫn là nguồn gốc của prompt; sửa quy tắc thì sửa cả prompt. Chạy thử không ghi gì: `triage_llm.py --dry-run`.
+
+## Chế độ cron (rút gọn, ít lần gọi model; cách cũ dùng agent Hermes)
 
 Khi chạy bằng cron, pre-script `triage-prep.sh` (gọi `scripts/triage_prepare.py`) đã làm xong bước 1: kết quả ở đầu prompt đã có cửa sổ tin của mọi nhóm có tin mới (mỗi nhóm kèm `LAST_LINE`) và danh sách ticket đang mở. **Không chạy lại** `zalo_window.py` hay `--list-open`. Mỗi lượt chỉ có tối đa 60 dòng mới mỗi nhóm; phần còn lại lượt sau xử lý. Với mỗi nhóm: làm bước 2–3, ghi mảng JSON ra `/tmp/zalo_cs_<group_id>.json` (mảng rỗng `[]` nếu không có yêu cầu nào), rồi chạy **một lệnh duy nhất**:
 
@@ -75,7 +79,7 @@ Mỗi dòng tin có nhãn `NV` (nhân viên) hoặc `KH` (khách). Phần NGỮ 
 - Tin mới bổ sung cho một yêu cầu cũ (cùng khách, cùng chủ đề, ví dụ "sao chưa ai xử lý", "thêm nữa là…") → dùng **`request_message_id` của ticket đang mở** (xem `--list-open`, khoá có dạng `group:mỏ_neo`). Script sẽ tự chuyển thành cập nhật.
 - Một khách nêu hai vấn đề khác nhau → hai yêu cầu.
 - Câu chào, cảm ơn, "ok", sticker → không phải yêu cầu.
-- NV đã giải quyết xong ngay trong chat và khách xác nhận → `status_hint: "resolved_in_chat"` (script ghi nhận, không tạo ticket).
+- NV đã giải quyết xong ngay trong chat và khách xác nhận → `status_hint: "resolved_in_chat"`: VẪN tạo ticket, ghi trạng thái `resolved` ("Đã xong trong chat" trong CSV), không đẩy Jira. Khách nhắc lại thì dùng mỏ neo của ticket đó (ticket được mở lại).
 
 ### 3. Điền thông tin cho từng yêu cầu
 

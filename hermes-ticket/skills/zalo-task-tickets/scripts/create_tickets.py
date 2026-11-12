@@ -14,7 +14,7 @@
     "due": "2026-11-05T17:00" | null,     # chỉ điền khi khách/NV nêu hạn; null → tính theo SLA
     "source_message_ids": ["m2001", "m2003"],
     "quote": "trích nguyên văn yêu cầu",
-    "status_hint": "open" | "resolved_in_chat",
+    "status_hint": "open" | "resolved_in_chat",   # resolved_in_chat: vẫn tạo ticket, ghi trạng thái `resolved` (không đẩy Jira)
     "attachments": [{"name": "DS dang ky xa A.xlsx", "path": "media/2026-11-04/…"}],  # tuỳ chọn
     "kind": "cs" | "internal",            # internal = task nội bộ từ nhóm nội bộ (không có khách)
     "confidence": 0.0-1.0
@@ -53,6 +53,14 @@ HISTORY = Path(os.environ.get("ZALO_HISTORY_DIR", HERMES_HOME / "zalo-history"))
 TZ = timezone(timedelta(hours=7))
 REQUIRED = ("request_message_id", "group_id", "title", "description")
 PRIORITIES = ("urgent", "high", "medium", "low")
+CLOSED_BY_HUMAN = ("not_ours", "duplicate", "wrong")  # trạng thái do mark_ticket.py ghi; không bao giờ tự mở lại
+
+
+def review_reason(t: dict) -> str:
+    """Vì sao tin này vào hàng đợi "cần người xem" (review.jsonl / review.csv)."""
+    if str(t.get("title", "")).startswith("[Cần xem]"):
+        return "Model không phân loại được sau nhiều lần hỏi (hệ thống tự tạo mục này)"
+    return f"Model không chắc đây là yêu cầu (độ tin cậy {t.get('confidence')})"
 
 
 def key_of(t: dict) -> str:
@@ -87,6 +95,47 @@ def msg_time(group: str, mid: str, history: Path) -> datetime | None:
         if m.get("message_id") == mid:
             return datetime.fromtimestamp(float(m["timestamp"]), TZ)
     return None
+
+
+def _aware(d: datetime) -> datetime:
+    return d if d.tzinfo else d.replace(tzinfo=TZ)
+
+
+def message_stamps(group: str, history: Path) -> dict[str, float]:
+    """message_id -> timestamp (giây) của các tin nhắn thật trong log nhóm (bỏ qua dòng sự kiện không có timestamp)."""
+    return {str(m["message_id"]): float(m["timestamp"]) for m in load_jsonl(history / f"{group}.jsonl")
+            if m.get("message_id") is not None and m.get("timestamp")}
+
+
+def print_compact(rows: list[dict], history: Path, now: datetime) -> None:
+    """Mỗi ticket một dòng `key | tiêu đề | khách | đơn vị | hạn`, để nhét vào prompt triage cho gọn.
+
+    Chỉ giữ ticket có tin neo trong TRIAGE_OPEN_DAYS ngày gần nhất (mặc định 7) HOẶC chưa quá hạn; tối đa
+    TRIAGE_OPEN_MAX dòng (mặc định 20) MỖI NHÓM, mới nhất trước. Ticket đã đóng (closed) / đã xong trong chat (resolved)
+    gắn nhãn "(đã đóng)" / "(đã xong trong chat)", chỉ xét theo tin neo. Số dòng còn lại mỗi nhóm in ra stderr."""
+    days = float(os.environ.get("TRIAGE_OPEN_DAYS", "7"))
+    cap = int(os.environ.get("TRIAGE_OPEN_MAX", "20"))
+    cutoff = now - timedelta(days=days)
+    by_group: dict[str, list[dict]] = {}
+    for r in rows:
+        by_group.setdefault(str(r.get("key", "")).split(":", 1)[0], []).append(r)
+    cell = lambda v: str(v or "").replace("|", "/").replace("\n", " ")  # noqa: E731
+    for group, items in by_group.items():
+        stamps = message_stamps(group, history)
+        keep = []
+        for r in items:
+            anchor = stamps.get(str(r.get("key", "")).split(":", 1)[-1])
+            when = datetime.fromtimestamp(anchor, TZ) if anchor else (_aware(datetime.fromisoformat(r["at"])) if r.get("at") else now)
+            not_overdue = r.get("status", "open") == "open" and bool(r.get("due")) and _aware(datetime.fromisoformat(r["due"])) >= now
+            if when >= cutoff or not_overdue:
+                keep.append((when, r))
+        keep.sort(key=lambda x: x[0], reverse=True)
+        for _, r in keep[:cap]:
+            cols = [r.get(k) for k in ("key", "title", "customer", "unit", "due")]
+            if r.get("status") in ("closed", "resolved"):
+                cols[1] = ("(đã đóng) " if r["status"] == "closed" else "(đã xong trong chat) ") + str(cols[1] or "")
+            print(" | ".join(cell(c) for c in cols))
+        print(f"# nhóm {group}: {min(len(keep), cap)}/{len(items)} ticket mở sau khi lọc", file=sys.stderr)
 
 
 def validate(t: dict, cfg: dict) -> list[str]:
@@ -160,6 +209,8 @@ def main() -> int:
     ap.add_argument("--min-confidence", type=float, default=0.6)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--list-open", action="store_true")
+    ap.add_argument("--group", help="với --list-open: chỉ ticket của nhóm này")
+    ap.add_argument("--compact", action="store_true", help="với --list-open: mỗi ticket một dòng `key | tiêu đề | khách | đơn vị | hạn`")
     a = ap.parse_args()
 
     cfg = json.loads(a.config.read_text(encoding="utf-8")) if a.config.exists() else {}
@@ -169,14 +220,22 @@ def main() -> int:
         now = datetime.now(TZ)
         rows = []
         for r in ledger.values():
-            if r.get("status", "open") != "open":
+            if r.get("status", "open") != "open" and not (a.compact and r.get("status") in ("closed", "resolved")):
+                continue  # compact còn giữ ticket đã đóng / đã xong trong chat (gắn nhãn) để khách nhắn tiếp thì mở lại được đúng ticket
+            if a.group and not str(r.get("key", "")).startswith(f"{a.group}:"):
+                continue
+            if a.compact:
+                rows.append(r)
                 continue
             row = {k: v for k, v in r.items() if k in ("key", "title", "customer", "assignee", "priority", "due", "url")}
             if r.get("due"):
                 d = datetime.fromisoformat(r["due"])
                 row["overdue"] = (d if d.tzinfo else d.replace(tzinfo=TZ)) < now
             rows.append(row)
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        if a.compact:
+            print_compact(rows, a.history_dir, now)
+        else:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
     if not a.tasks:
         ap.error("cần file tasks (hoặc --list-open)")
@@ -200,18 +259,21 @@ def main() -> int:
         key = key_of(t)
         ids = sorted(set(t.get("source_message_ids") or []) | {t["request_message_id"]})
         prev = ledger.get(key)
-        if prev and prev.get("status") == "not_ours":  # yêu cầu của đối thủ (Misa), đã loại: đừng mở lại
-            out.append({"key": key, "title": t["title"], "status": "skipped_not_ours"})
+        if prev and prev.get("status") in CLOSED_BY_HUMAN:  # đã loại/đánh dấu (not_ours: yêu cầu của Misa; duplicate; wrong): đừng mở lại
+            out.append({"key": key, "title": t["title"], "status": f"skipped_{prev['status']}"})
             continue
         new_ids = [i for i in ids if not prev or i not in prev["seen_ids"]]
         if prev and not new_ids:
             out.append({"key": key, "title": t["title"], "status": "duplicate", "url": prev.get("url")})
             continue
-        if not prev and t.get("status_hint") == "resolved_in_chat":
-            out.append({"key": key, "title": t["title"], "status": "resolved_in_chat"})
-            continue
         if not prev and float(t.get("confidence", 1)) < a.min_confidence:
             out.append({"key": key, "title": t["title"], "status": "low_confidence"})
+            if not a.dry_run and key not in {r.get("key") for r in load_jsonl(a.state_dir / "review.jsonl")}:
+                # không có ticket, nhưng giữ lại hàng đợi "cần người xem" để không mất yêu cầu của khách
+                append(a.state_dir / "review.jsonl", {"key": key, "title": t["title"], "description": t.get("description"),
+                                                      "quote": t.get("quote"), "customer": t.get("customer_name"),
+                                                      "confidence": t.get("confidence"), "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                      "reason": review_reason(t)})
             continue
         r = route(t, cfg, a.history_dir)
         action = "would_update" if prev else "would_create"
@@ -246,13 +308,21 @@ def main() -> int:
             out.append({"key": key, "title": t["title"], "status": "error", "error": str(e)})
             continue
         rec = {"key": key, "url": url, "title": t["title"], "backend": a.backend, "seen_ids": ids,
-               "customer": t.get("customer_name"), "kind": t.get("kind", "cs"), "assignee": r["assignee_name"] or r["assignee_zalo_id"],
-               "priority": r["priority"], "due": r["due"],
+               "customer": t.get("customer_name") or (prev or {}).get("customer"), "kind": t.get("kind", "cs"),
+               # cập nhật ticket cũ thì giữ người nhận/ưu tiên/hạn đã có (trừ khi tin cập nhật nêu rõ)
+               "assignee": (r["assignee_name"] or r["assignee_zalo_id"]) if not prev or t.get("assignee_zalo_id") else (prev.get("assignee") or r["assignee_name"] or r["assignee_zalo_id"]),
+               "priority": r["priority"] if not prev or t.get("priority") else (prev.get("priority") or r["priority"]),
+               "due": r["due"] if not prev or t.get("due") else (prev.get("due") or r["due"]),
+               # unit/platform do model điền; cập nhật không có thì giữ giá trị cũ
+               "unit": t.get("unit") or (prev or {}).get("unit"), "platform": t.get("platform") or (prev or {}).get("platform"),
                "status": "resolved" if t.get("status_hint") == "resolved_in_chat" else "open",
                "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         append(a.state_dir / "ledger.jsonl", rec)
         ledger[key] = {**(prev or {}), **rec}
-        out.append({**rec, "status": "updated" if prev else "created", "routed_by": r["routed_by"], "due_by": r["due_by"]})
+        # resolved_in_chat vẫn tạo ticket nhưng trạng thái ledger là `resolved` (đã xong trong chat): có trong CSV cho team,
+        # KHÔNG đẩy Jira (jira_push chỉ đẩy `open`) và không vào jsm_requests.json
+        out.append({**rec, "status": "updated" if prev else "created", "ledger_status": rec["status"],
+                    "routed_by": r["routed_by"], "due_by": r["due_by"]})
 
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 1 if any(o["status"] in ("invalid", "error") for o in out) else 0
