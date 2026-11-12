@@ -662,5 +662,23 @@ class ResolveRuleUnitTests(unittest.TestCase):
         self.assertIsNone(cv.resolve_rule({"unit": "Trường A", "customer": "Khách A"}, {"text": "đã xong"}, [], "g:k"))   # đơn vị quá ngắn, không nêu
 
 
+
+class TriagePrepareDefaultsTests(unittest.TestCase):
+    def help_text(self, **env):
+        import subprocess
+        script = __import__("pathlib").Path(__file__).resolve().parent.parent / "skills" / "zalo-task-tickets" / "scripts" / "triage_prepare.py"
+        e = {k: v for k, v in os.environ.items() if k not in ("TRIAGE_MAX_LINES", "TRIAGE_CONTEXT")}
+        e.update(env, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        return subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True, encoding="utf-8", env=e).stdout
+
+    def test_mac_dinh_30_dong_4_tin_ngu_canh_va_doc_bien_moi_truong(self):
+        t = " ".join(self.help_text().split())
+        self.assertIn("(mặc định 30)", t)
+        self.assertIn("(mặc định 4)", t)
+        t = " ".join(self.help_text(TRIAGE_MAX_LINES="17", TRIAGE_CONTEXT="2").split())
+        self.assertIn("(mặc định 17)", t)
+        self.assertIn("(mặc định 2)", t)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -233,11 +233,13 @@ cp $R/scripts/triage-llm.sh $R/scripts/sync-tickets-onedrive.sh $P/scripts/ && c
 
 State shadow dựng bằng `python3 $R/scripts/setup_shadow.py --real $P/zalo-tickets --shadow $P/zalo-tickets-shadow` (cursor = cursor thật lúc chạy; thêm `--reset` để dựng lại từ đầu; `--dry-run` để xem trước).
 
-**3. Tạo cron, lệch phút so với job cũ** (job cũ chạy các phút :03/:18/:33/:48 UTC; shadow đọc lịch sử do job cũ xuất nên chạy sau khoảng 5 phút):
+**3. Tạo cron, lệch phút so với job cũ** (từ 12/11 job cũ chạy mỗi 30 phút, hiện vào khoảng phút :02/:32 UTC; shadow đọc lịch sử do job cũ xuất nên chạy sau khoảng 5 phút; xem phút chính xác bằng `hermes -p ticket cron list`):
 
 ```
-hermes -p ticket cron create "8,23,38,53 * * * *" --name zalo-ticket-triage-shadow --script triage-llm.sh --no-agent --deliver local
+hermes -p ticket cron create "7,37 * * * *" --name zalo-ticket-triage-shadow --script triage-llm.sh --no-agent --deliver local
 ```
+
+Job cũ giảm tải: `TRIAGE_MAX_LINES` 30 và `TRIAGE_CONTEXT` 4 (mặc định trong `triage-prep.sh`/`triage_prepare.py`, không cần đặt trong `.env`), lịch 30 phút (`hermes -p ticket cron edit <id> --schedule "every 30m"`); lịch sử chỉ được xuất mỗi lần job cũ chạy nên shadow chạy dày hơn cũng không có tin mới.
 
 Kiểm tra: `hermes -p ticket cron list` (thấy 4 job), chạy thử một lần `hermes -p ticket cron run <id job shadow>`, rồi xem `$P/zalo-tickets-shadow/ledger.jsonl` và `$P/zalo-tickets-shadow/export/review.csv` (tin `[Cần xem]`). Dừng: `hermes -p ticket cron pause <id>` (hoặc `cron remove <id>`); job cũ không bị ảnh hưởng.
 

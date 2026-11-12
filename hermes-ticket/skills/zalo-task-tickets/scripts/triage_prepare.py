@@ -5,12 +5,14 @@ In một lần: cửa sổ tin mới của MỌI nhóm có dòng mới + danh s�
 có tin mới, dòng cuối là `{"wakeAgent": false}` để Hermes bỏ qua hẳn lượt agent (không tốn model).
 Mỗi lượt chỉ lấy tối đa --max dòng mới mỗi nhóm; phần còn lại để lượt sau (checkpoint không nhảy cóc).
 
-  triage_prepare.py [--max 60] [--context 8]
+  triage_prepare.py [--max 30] [--context 4]
+Mặc định lấy từ biến môi trường TRIAGE_MAX_LINES (30) và TRIAGE_CONTEXT (4); tham số dòng lệnh thắng. Giảm từ 60/8 để job cũ bớt tốn hạn mức model.
 Chỉ dùng thư viện chuẩn. Biến môi trường như zalo_window.py (ZALO_HISTORY_DIR, ZALO_TICKETS_STATE).
 """
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import subprocess
 import sys
@@ -28,8 +30,8 @@ def run(script: str, *args: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max", type=int, default=60, help="tối đa số dòng mới mỗi nhóm trong một lượt")
-    ap.add_argument("--context", type=int, default=8, help="số tin cũ đưa kèm làm ngữ cảnh")
+    ap.add_argument("--max", type=int, default=int(os.environ.get("TRIAGE_MAX_LINES") or 30), help="tối đa số dòng mới mỗi nhóm trong một lượt (mặc định %(default)s)")
+    ap.add_argument("--context", type=int, default=int(os.environ.get("TRIAGE_CONTEXT") or 4), help="số tin cũ đưa kèm làm ngữ cảnh (mặc định %(default)s)")
     a = ap.parse_args()
 
     pending = []  # (group_id, tên, số dòng mới)
