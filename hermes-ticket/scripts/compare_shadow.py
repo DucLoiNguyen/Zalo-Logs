@@ -30,7 +30,7 @@ def mask(s: str | None) -> str:
     return re.sub(r"(?<!\d)(\+?84|0)\d{8,10}(?!\d)", "<sdt>", s).replace("|", "/")
 
 
-def load(state: Path, baseline: set[str], history: Path, day) -> list[dict]:
+def load(state: Path, baseline: set[str], history: Path, day, cutoff: dict | None = None) -> list[dict]:
     """Ticket mới (không thuộc baseline) có tin neo trong ngày `day`: key, group, when, customer keys, title, category, unit, status."""
     led = ct.load_ledger(state)
     stamps: dict[str, dict] = {}
@@ -43,6 +43,8 @@ def load(state: Path, baseline: set[str], history: Path, day) -> list[dict]:
         if group not in stamps:
             stamps[group] = ct.message_stamps(group, history)
         ts = stamps[group].get(anchor)
+        if ts and cutoff and ts <= cutoff.get(group, 0):
+            continue  # shadow dựng bằng --from-now: không thấy được tin neo trước mốc này, so sánh sẽ sai
         rec = led[key]
         when = datetime.fromtimestamp(ts, ct.TZ) if ts else (ct._aware(datetime.fromisoformat(rec["at"])) if rec.get("at") else None)
         if when is None or when.date() != day:
@@ -92,7 +94,8 @@ def main() -> int:
         return 1
     base = json.loads(base_p.read_text(encoding="utf-8"))
     baseline = set(base["keys"])
-    real, shadow = load(a.real, baseline, a.history, day), load(a.shadow, baseline, a.history, day)
+    cutoff = base.get("from_now") or {}
+    real, shadow = load(a.real, baseline, a.history, day, cutoff), load(a.shadow, baseline, a.history, day, cutoff)
     pairs, only_real, only_shadow = match(real, shadow, a.window_min)
     review = [r for r in ct.load_jsonl(a.shadow / "review.jsonl") if str(r.get("at", ""))[:10] == str(day)]
 

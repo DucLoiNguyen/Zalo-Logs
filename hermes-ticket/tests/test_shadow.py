@@ -86,6 +86,37 @@ class SetupShadowTests(ShadowBase):
         self.assertEqual(r.returncode, 0)
         self.assertFalse(self.shadow.exists())
 
+    def test_from_now_nhay_cursor_toi_cuoi_file_va_ghi_moc_cho_compare(self):
+        self.seed_real()
+        jl(self.hist / "g1.jsonl", [{"message_id": f"m{i}", "from_id": "x", "from_name": "x", "text": "t", "timestamp": ts(i), "type": "text"} for i in range(1, 8)]
+           + [{"event": "recall", "message_id": "m3"}])            # dòng cuối là sự kiện không có timestamp
+        jl(self.hist / "g2.jsonl", [{"message_id": "a1", "from_id": "x", "from_name": "x", "text": "t", "timestamp": ts(50), "type": "text"}])   # nhóm chưa có cursor thật
+        before = digest(self.real)
+        r = self.run_py("setup_shadow.py", "--real", str(self.real), "--shadow", str(self.shadow), "--from-now", "--history", str(self.hist))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("bỏ qua 3 dòng tồn", r.stdout)                  # g1: cursor thật 5 -> cuối file 8
+        self.assertEqual(digest(self.real), before)                    # vẫn không ghi state thật
+        self.assertEqual(json.loads((self.shadow / "cursors" / "g1.json").read_text(encoding="utf-8")), {"line": 8})
+        self.assertEqual(json.loads((self.shadow / "cursors" / "g2.json").read_text(encoding="utf-8")), {"line": 1})
+        base = json.loads((self.shadow / "baseline_keys.json").read_text(encoding="utf-8"))
+        self.assertEqual(base["from_now"], {"g1": ts(7), "g2": ts(50)})   # giờ tin thật cuối, bỏ dòng sự kiện
+        self.assertEqual(base["keys"], ["g1:m1", "g1:m2"])
+
+    def test_khong_co_from_now_thi_giu_cursor_that(self):
+        self.seed_real()
+        self.run_py("setup_shadow.py", "--real", str(self.real), "--shadow", str(self.shadow))
+        base = json.loads((self.shadow / "baseline_keys.json").read_text(encoding="utf-8"))
+        self.assertNotIn("from_now", base)
+        self.assertEqual(json.loads((self.shadow / "cursors" / "g1.json").read_text(encoding="utf-8")), {"line": 5})
+
+    def test_dry_run_from_now_khong_tao_gi_va_in_ke_hoach(self):
+        self.seed_real()
+        jl(self.hist / "g1.jsonl", [{"message_id": "m1", "timestamp": ts(1), "type": "text", "text": "t", "from_id": "x", "from_name": "x"}] * 9)
+        r = self.run_py("setup_shadow.py", "--real", str(self.real), "--shadow", str(self.shadow), "--from-now", "--history", str(self.hist), "--dry-run")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("cursor = dòng 9", r.stdout)
+        self.assertFalse(self.shadow.exists())
+
 
 class CompareShadowTests(ShadowBase):
     def build(self, state: Path, tickets: list[tuple]) -> None:
@@ -124,6 +155,20 @@ class CompareShadowTests(ShadowBase):
         self.assertIn("[Cần xem] gì đó", text)
         self.assertEqual(digest(self.real).keys(), {"tickets.jsonl", "ledger.jsonl"})  # không ghi gì vào state thật
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["shadow-compare-2026-11-10.md"])
+
+    def test_compare_bo_qua_ticket_truoc_moc_from_now(self):
+        jl(self.hist / "g1.jsonl", [{"message_id": m, "from_id": "x", "from_name": "x", "text": "t", "timestamp": ts(mins), "type": "text"}
+                                    for m, mins in (("r1", 0), ("s2", 60), ("r2", 61))])
+        self.build(self.real, [("g1:r1", "c1", "Khách A", "[A] t", "account", "A", "open"), ("g1:r2", "c2", "Khách B", "[B] t", "account", "B", "open")])
+        self.build(self.shadow, [("g1:s2", "c2", "Khách B", "[B] t", "account", "B", "open")])
+        (self.shadow / "baseline_keys.json").write_text(json.dumps({"created_at": "2026-11-10T00:00:00+00:00", "keys": [], "from_now": {"g1": ts(30)}}), encoding="utf-8")
+        out = self.tmp / "out"
+        r = self.run_py("compare_shadow.py", "--date", "2026-11-10", "--real", str(self.real), "--shadow", str(self.shadow), "--history", str(self.hist), "--out-dir", str(out))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = (out / "shadow-compare-2026-11-10.md").read_text(encoding="utf-8")
+        self.assertIn("| Thật (agent cũ) | 1 |", text)     # r1 (trước mốc) bị bỏ qua, chỉ còn r2
+        self.assertIn("| Ghép được | 1 |", text)
+        self.assertIn("| Chỉ có ở thật | 0 |", text)
 
     def test_ngay_khac_thi_rong_va_thieu_baseline_thi_bao_loi(self):
         self.build(self.real, [("g1:r1", "c1", "A", "t", "q", None, "open")])
