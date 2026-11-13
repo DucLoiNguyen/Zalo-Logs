@@ -30,6 +30,8 @@ Node >= 20 (máy dev v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, `
 - `npm run stop` / `npm run resume`: tắt hẳn (Disable task + dừng `start.js`) / bật lại và chạy ngay. Không gỡ task.
 - `npm run jira -- on|off|status [-FromNow]`: bật/tắt đẩy ticket lên Jira (đổi `jira.enabled` trong `cs_config.json`, hiệu lực ở lượt cron kế tiếp).
 - `.\setup-autostart.ps1 [-Remove]`: Task Scheduler chạy `node src/start.js` khi đăng nhập + lặp mỗi 5 phút (`IgnoreNew`) để chạy lại sau khi watchdog thoát. Task không chuyển hướng output.
+- `.\setup-hermes-autostart.ps1 [-DryRun|-Rollback]`: đăng ký lại task `9router` + `HermesGateway` (đăng nhập + lặp 5 phút `IgnoreNew` + Kernel-Power 107 "ngủ dậy"; gateway chờ 9router trả 200 ở `/v1/models`); XML gốc ở `data/task-backup/<tên>-original.xml` (`-Rollback` trả lại). Bật nhật ký Task Scheduler cần admin: `wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true`.
+- `.\setup-health.ps1 [-OneDriveDir <thư mục>] [-Remove]` + `npm run health [-- --dry-run|--daily]`: task `hermes-health` mỗi 5 phút (`src/health.js`) báo toast + `data/health/HEALTH.txt` (+ chép OneDrive) khi cron Hermes quá ngưỡng (triage 40 phút khi chạy 30 phút) hoặc 9router/WSL không phản hồi; một lần mỗi đợt + báo phục hồi; không tự khởi động lại gì; ghi `data/health/cron-latency-<ngày>.md` hằng ngày.
 - `npm run selftest`: test bằng dữ liệu giả, không cần mạng.
 
 ## Kiến trúc (src/)
@@ -48,7 +50,7 @@ Luồng chính: `start.js` → `store.js` (SQLite + Atlas) → `daily.js` / `med
 - Chỉ 1 listener/tài khoản: mở Zalo Web cùng lúc sẽ ngắt kết nối.
 - Gửi vào "Cloud của tôi" (chat với chính mình) KHÔNG được: zca-js trả lỗi 114 "Tham số không hợp lệ". `reportTo` phải là user khác hoặc nhóm.
 - `api.getGroupChatHistory` (HTTP) đã bị Zalo gỡ (404); backfill dùng `listener.requestOldMessages(ThreadType.Group, lastMsgId)` + sự kiện `old_messages`.
-- Task Scheduler "restart on failure" KHÔNG chạy khi thoát mã khác 0; đừng dựa vào nó. `LastTaskResult` 2147946720 (0x800710E0) là bình thường (lần lặp bị bỏ vì tool đang chạy).
+- Task Scheduler "restart on failure" KHÔNG chạy khi thoát mã khác 0; đừng dựa vào nó. Task bọc `wsl.exe` (9router, HermesGateway) từng tự tắt: máy ngủ làm VM WSL chết, và `wsl.exe` bị SIGINT từ Relay; nay có trigger lặp 5 phút. Cập nhật (`Register-ScheduledTask -Force`) một task đang chạy sẽ dừng tiến trình của nó. `LastTaskResult` 2147946720 (0x800710E0) là bình thường (lần lặp bị bỏ vì tool đang chạy).
 - Ảnh/file/video: link Zalo có thể hết hạn (thử được tin 5 ngày trước, chưa biết thời hạn thật), nên tải ngay khi tin đến. `exports/media` chứa dữ liệu nhạy cảm và OneDrive đồng bộ lên đám mây.
 - Bí mật: `data/`, `.env`, `exports/`, `config/config.json` (mẫu: `config/config.example.json`) đều trong `.gitignore`. Atlas cần whitelist IP và user DB. `exports/~$*.xlsx` là file tạm của Excel, bỏ qua.
 - Ngày không có tin thì không có file `exports/Zalo_<ngày>.xlsx`, không phải lỗi.
@@ -64,7 +66,9 @@ Luồng chính: `start.js` → `store.js` (SQLite + Atlas) → `daily.js` / `med
 - Hermes: nhận diện nhân viên Misa chỉ theo tên; ticket "Thu quỹ phòng" (nội bộ) và ticket trùng THPT Hướng Hóa chưa xử lý; ticket quá hạn chưa có người nhận; `unit`/`platform` do model điền có thể sai.
 - Hermes: `triage_llm.py` (thay agent, 2 bước + kiểm tra phủ) chỉ mới chạy thử/shadow, chưa thay job cũ; chờ chấm tay `data/triage-llm-label.md` và so sánh `compare_shadow.py`. `resolved_in_chat` đã chốt: vẫn tạo ticket trạng thái `resolved` (mã mới nằm ở nhánh `triage-llm` + skill shadow, chưa chép sang skill của job cũ). Chờ duyệt đóng 16 ticket mở quá 5 ngày (`mark_ticket.py --auto-close-days --dry-run --list`; 1 ticket là yêu cầu Misa, nên `not_ours`).
 - Jira: đang BẬT chế độ dự phòng (chờ 20 phút, chỉnh được); chưa có task nào do Hermes tạo thật; accountId mới điền cho 1 nhân viên; có thể tạo trùng nếu chỉ mục Jira chậm.
-- Mã triage_llm/shadow đã commit trên nhánh `triage-llm`, chưa merge, chưa push; chưa theo dõi đủ 5 ngày làm việc.
+- Mã triage_llm/shadow/health đã commit trên nhánh `triage-llm`: `1133afd` đã push, các commit sau (đến `cd91ccd`, `b594963` và commit A/B) CHƯA push, chưa merge; chưa theo dõi đủ 5 ngày làm việc.
+- Hermes đang TẮT từ tối 12/11 theo yêu cầu (task `9router`, `HermesGateway`, `hermes-health` ở trạng thái Disabled; chỉ còn `zalo-logger`). Bật lại: `Enable-ScheduledTask` + `Start-ScheduledTask` (xem Lệnh). Chưa tạo cron shadow `zalo-ticket-triage-shadow`; chưa dựng lại state shadow bằng `setup_shadow.py --reset --from-now` (mới dry-run). Job cũ `zalo-ticket-triage` đã hạ xuống every 30m (30 dòng/4 tin ngữ cảnh).
+- Chưa bật nhật ký Task Scheduler (cần admin: `wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true`); chưa rõ vì sao `wsl.exe` của task 9router/HermesGateway bị SIGINT (máy ngủ chắc chắn làm VM WSL chết); `triage_llm` nhóm nội bộ cần `TRIAGE_INTERNAL_MODEL` Haiku (Gemini trả rỗng); bước resolve và gộp ticket mới đo trên mẫu nhỏ.
 
 ## Tài liệu chi tiết
 - `hermes-ticket/CLAUDE.md`: Hermes, cron, Jira. `hermes-ticket/TRIEN-KHAI.md`: triển khai. `docs/WORKLOG.md`: nhật ký làm việc.
