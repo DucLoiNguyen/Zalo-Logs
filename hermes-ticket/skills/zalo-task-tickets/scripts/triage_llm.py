@@ -67,7 +67,11 @@ class LLMStop(Exception):
 
 
 def log(*a) -> None:
-    print(*a, flush=True)
+    try:
+        print(*a, flush=True)
+    except UnicodeEncodeError:  # stdout không phải UTF-8 (vd Windows cp1252): thay ký tự không in được thay vì làm hỏng cả lượt
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(*(str(x).encode(enc, "replace").decode(enc) for x in a), flush=True)
 
 
 # ---------------------------------------------------------------- chạy script con
