@@ -16,3 +16,8 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts # better-sqlite3 13 đã đóng gói sẵn prebuilds, tránh node-gyp biên dịch lại
       - run: npm run selftest
+      # test của phần Hermes (Python, chỉ thư viện chuẩn, không gọi mạng ngoài)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s hermes-ticket/tests

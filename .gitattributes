@@ -1,0 +1,2 @@
+# script chạy trong WSL/Linux phải luôn là LF (CRLF làm bash báo lỗi "pipefail: invalid option name")
+*.sh text eol=lf

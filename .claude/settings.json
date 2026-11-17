@@ -7,19 +7,19 @@
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(npm run prune-exports -- --dry-run:*)",
-      "Bash(npm run export-hermes -- --dry-run:*)"
+      "Bash(npm run export-hermes -- --dry-run:*)",
+      "Bash(npm run stop)",
+      "Bash(npm run resume)",
+      "Bash(npm run jira:*)"
     ],
     "deny": [
       "Read(./.env)",
-      "Read(./data/**)",
+      "Read(./data/credentials.json)",
       "Read(./hermes-ticket/config/**)",
       "Bash(npm start)",
       "Bash(npm run dev)",
       "Bash(npm run login)",
-      "Bash(npm run send-report:*)",
-      "Bash(npm run jira:*)",
-      "Bash(npm run stop)",
-      "Bash(npm run resume)"
+      "Bash(npm run send-report:*)"
     ]
   }
 }

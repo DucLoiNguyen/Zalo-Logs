@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Đẩy ticket Hermes (tickets.jsonl + ledger.jsonl) lên Jira Service Management bằng REST API.
 
-Chỉ đẩy ticket: trạng thái `open` trong ledger, tin neo gửi từ `jira.start` trở đi, và chưa từng đẩy.
+Chỉ đẩy ticket: trạng thái `open` HOẶC `resolved` (đã xong trong chat) trong ledger, tin neo gửi từ `jira.start` trở đi, và chưa từng đẩy.
+Ticket `resolved` được tạo rồi chuyển sang trạng thái Done (transition có statusCategory "done"); ticket đã đẩy lúc còn `open` mà sau đó
+thành `resolved` thì cũng được chuyển Done. Chỉ với issue do Hermes tạo (không đụng issue có sẵn của người khác).
 Cập nhật của khách (dòng `update`) thành comment nội bộ. Trạng thái đã đẩy ở <state>/jira_state.json
 (ghi sau MỖI ticket nên chết giữa chừng không tạo trùng; mô tả ticket có `zalo-ticket-key: <key>`).
 
@@ -9,7 +11,8 @@ Cấu hình (cs_config.json > "jira"; thông tin bí mật chỉ ở .env của 
   {"jira": {"enabled": true, "start": "2026-11-06T13:30+07:00", "service_desk_id": "<id>",
             "base_url": "https://<site>.atlassian.net"}}
   .env: JIRA_EMAIL, JIRA_API_TOKEN   (và JIRA_BASE_URL nếu không đặt base_url trong cấu hình)
-  staff.<zalo_id>.jira = accountId Jira của nhân viên (hoặc email) để gán người xử lý.
+  staff.<zalo_id>.jira = accountId Jira của nhân viên (hoặc email) để gán người xử lý; nhân viên chưa có thì dùng `default_assignee`
+  của site (accountId, email, hoặc "me" = chủ API token).
 Request Type lấy theo tên `categories.<cat>.jsm_request_type`.
 
   jira_push.py [--dry-run] [--limit N] [--check] [--list-desks]
@@ -24,6 +27,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -103,6 +107,33 @@ class Jira:
                 return e.code, {"raw": raw[:300]}
 
 
+NO_DONE = "không có transition nào đi tới Done"
+
+
+def to_done(jira: "Jira", ik: str) -> tuple[bool, str]:
+    """Chuyển issue sang trạng thái Done: lấy transition dẫn tới statusCategory "done"; nếu workflow bắt đi vòng thì đi qua bước "indeterminate"
+    (vd In Progress) rồi thử lại (tối đa 3 bước). Issue đã Done sẵn thì coi là xong. Trả (thành công, ghi chú ngắn)."""
+    cs, iss = jira.call("GET", f"/rest/api/3/issue/{ik}?fields=status")
+    if cs == 200 and (((iss.get("fields") or {}).get("status") or {}).get("statusCategory") or {}).get("key") == "done":
+        return True, "đã Done sẵn"
+    for _ in range(3):
+        c, r = jira.call("GET", f"/rest/api/3/issue/{ik}/transitions")
+        if c != 200:
+            return False, f"GET transitions {c}"
+        trs = r.get("transitions") or []
+        cat = lambda x: ((x.get("to") or {}).get("statusCategory") or {}).get("key")  # noqa: E731
+        done = [x for x in trs if cat(x) == "done"]
+        pick = done[0] if done else next((x for x in trs if cat(x) == "indeterminate"), None)
+        if not pick:
+            return False, NO_DONE
+        c2, _ = jira.call("POST", f"/rest/api/3/issue/{ik}/transitions", {"transition": {"id": str(pick["id"])}})
+        if c2 not in (200, 204):
+            return False, f"POST transition {c2}"
+        if done:
+            return True, str(pick.get("name") or "Done")
+    return False, "quá 3 bước chuyển trạng thái"
+
+
 def hist_of(g: str, cache: dict) -> dict:
     """Đọc JSONL lịch sử của nhóm một lần: msg[message_id] = dòng tin; att[message_id] = tệp đã tải xong (sự kiện đến sau)."""
     if g not in cache:
@@ -150,14 +181,16 @@ def files_of(t: dict, h: dict) -> list[dict]:
     return out
 
 
-def task_description(t: dict, key: str, cfg: dict, h: dict, anchor: datetime, files: list[dict]) -> str:
-    """Mô tả theo quy ước của task do huantd tạo (SUP-19…): khối 'Thông tin yêu cầu', 'Nội dung', 'File đính kèm', 'Tin nhắn gốc'."""
+VIEC = {"account_registration": "Tạo tài khoản theo tệp/danh sách khách gửi", "account_change": "Điều chỉnh tài khoản theo yêu cầu của khách",
+        "access_issue": "Kiểm tra và khắc phục lỗi đăng nhập/truy cập cho khách", "question": "Trả lời câu hỏi của khách",
+        "report_request": "Chuẩn bị báo cáo theo yêu cầu của khách", "complaint": "Xử lý khiếu nại và phản hồi lại khách",
+        "internal_task": "Thực hiện việc nội bộ được giao"}
+
+
+def task_ctx(t: dict, key: str, cfg: dict, h: dict, anchor: datetime, files: list[dict]) -> dict:
+    """Các trường dùng chung để dựng mô tả task (bản chữ thường và bản ADF định dạng)."""
     conf = float(t.get("confidence", 1))
-    conf_s = "Cao" if conf >= 0.8 else "Trung bình" if conf >= 0.6 else "Thấp"
-    loai = LOAI.get(t.get("category") or "", (t.get("category") or "Khác", "khac"))[0]
     g = cfg.get("groups", {}).get(t["group_id"], {})
-    gname = f"{g.get('name') or t['group_id']} ({'nội bộ' if t.get('kind') == 'internal' else 'khách hàng'})"
-    who = t.get("customer_name") or "-"
     ids = [t["request_message_id"], *[i for i in (t.get("source_message_ids") or []) if i != t["request_message_id"]]]
     orig = []
     for mid in ids:
@@ -166,21 +199,82 @@ def task_description(t: dict, key: str, cfg: dict, h: dict, anchor: datetime, fi
             continue
         a = m.get("attachment")
         body = f"[Tập tin] {a.get('name')}" if a else (m.get("text") or "").replace("\n", " ").strip()[:300]
-        orig.append(f"[{clock(m['timestamp'])}] {m.get('from_name') or m.get('from_id')}: {body}")
-    lines = [f"Ticket do AI tạo từ tin nhắn Zalo, cần người kiểm tra. Độ tin cậy: {conf_s}. {t['description']}",
-             "Thông tin yêu cầu", f"Loại: {loai}", f"Đơn vị: {t.get('unit') or 'chưa rõ'}",
-             f"Người yêu cầu: {who}", f"Tên trên Zalo: {who}", f"Nhóm Zalo: {gname}",
-             f"Thời điểm nhận: {anchor:%Y-%m-%d %H:%M:%S}", f"Nền tảng: {t.get('platform') or 'Chưa rõ'}",
-             "Số tài khoản: chưa rõ", "Nội dung", t["description"]]
-    if t.get("due"):
-        lines.append(f"Hạn xử lý (SLA): {parse_time(t['due']).astimezone(TZ):%Y-%m-%d %H:%M}")
-    if files:
+        orig.append((clock(m["timestamp"]), m.get("from_name") or m.get("from_id"), body))
+    return {
+        "conf": conf, "conf_s": "Cao" if conf >= 0.8 else "Trung bình" if conf >= 0.6 else "Thấp",
+        "loai": LOAI.get(t.get("category") or "", (t.get("category") or "Khác", "khac"))[0],
+        "gname": f"{g.get('name') or t['group_id']} ({'nội bộ' if t.get('kind') == 'internal' else 'khách hàng'})",
+        "who": t.get("customer_name") or "-", "unit": t.get("unit") or "chưa rõ", "platform": t.get("platform") or "Chưa rõ",
+        "anchor": f"{anchor:%Y-%m-%d %H:%M:%S}", "ids": ids, "orig": orig, "key": key, "desc": t["description"],
+        "due": f"{parse_time(t['due']).astimezone(TZ):%Y-%m-%d %H:%M}" if t.get("due") else None,
+        "priority": t.get("priority"), "files": [(f["name"], clock(f["when"]) if f["when"] else None) for f in files],
+        "viec": VIEC.get(t.get("category") or "", "Xem yêu cầu của khách và xử lý"),
+    }
+
+
+def task_description(t: dict, key: str, cfg: dict, h: dict, anchor: datetime, files: list[dict]) -> str:
+    """Mô tả dạng chữ thường (dùng cho kiểm tra/ghi log). Bản đăng lên Jira là task_description_adf (có định dạng)."""
+    c = task_ctx(t, key, cfg, h, anchor, files)
+    lines = [f"Ticket do AI tạo từ tin nhắn Zalo, cần người kiểm tra. Độ tin cậy: {c['conf_s']}. {c['desc']}",
+             "Thông tin yêu cầu", f"Loại: {c['loai']}", f"Đơn vị: {c['unit']}",
+             f"Người yêu cầu: {c['who']}", f"Tên trên Zalo: {c['who']}", f"Nhóm Zalo: {c['gname']}",
+             f"Thời điểm nhận: {c['anchor']}", f"Nền tảng: {c['platform']}",
+             "Số tài khoản: chưa rõ", "Nội dung", c["desc"]]
+    if c["due"]:
+        lines.append(f"Hạn xử lý (SLA): {c['due']}")
+    if c["files"]:
         lines.append("File đính kèm")
-        lines += [f"{f['name']}" + (f" ({clock(f['when'])})" if f["when"] else "") + " - xem mục Attachments của ticket" for f in files]
+        lines += [f"{n}" + (f" ({w})" if w else "") + " - xem mục Attachments của ticket" for n, w in c["files"]]
     lines.append("Tin nhắn gốc")
-    lines += orig
-    lines += [f"Mã tin Zalo: {', '.join(ids)}", f"zalo-ticket-key: {key}"]
+    lines += [f"[{w}] {who}: {body}" for w, who, body in c["orig"]]
+    lines += [f"Mã tin Zalo: {', '.join(c['ids'])}", f"zalo-ticket-key: {c['key']}"]
     return "\n".join(lines)
+
+
+# --- dựng ADF có định dạng (bố cục theo task của huantd: khung lưu ý, tiêu đề mục, nhãn in đậm; thêm dòng "Việc cần làm" và nhấn mạnh thông tin cần để xử lý)
+def _tx(text: str, bold: bool = False, code: bool = False, red: bool = False) -> dict:
+    marks = ([{"type": "strong"}] if bold else []) + ([{"type": "code"}] if code else []) \
+        + ([{"type": "textColor", "attrs": {"color": "#de350b"}}] if red else [])
+    return {"type": "text", "text": text, **({"marks": marks} if marks else {})}
+
+
+def _p(*nodes: dict) -> dict:
+    return {"type": "paragraph", "content": [n for n in nodes if n.get("text")]}
+
+
+def _h(text: str) -> dict:
+    return {"type": "heading", "attrs": {"level": 3}, "content": [_tx(text)]}
+
+
+def _li(label: str, value: str, bold_value: bool = True, unknown: bool = False) -> dict:
+    return {"type": "listItem", "content": [_p(_tx(label + ": ", bold=True), _tx(value, bold=bold_value and not unknown, red=unknown))]}
+
+
+def task_description_adf(t: dict, key: str, cfg: dict, h: dict, anchor: datetime, files: list[dict]) -> dict:
+    c = task_ctx(t, key, cfg, h, anchor, files)
+    unit_unknown = c["unit"] in ("chưa rõ", "Chưa rõ đơn vị")
+    low = c["conf"] < 0.6
+    head = [_p(_tx("Việc cần làm: ", bold=True), _tx(c["viec"], bold=True), _tx(" — " + c["unit"], bold=True, red=unit_unknown))]
+    if c["due"]:
+        head.append(_p(_tx("Hạn xử lý (SLA): ", bold=True), _tx(c["due"], bold=True)))
+    head.append(_p(_tx("Ticket do AI (Hermes) tạo từ tin nhắn Zalo, cần người kiểm tra. Độ tin cậy: "), _tx(c["conf_s"], bold=True, red=low)
+                   , _tx(". Xem file đính kèm và tin nhắn gốc bên dưới trước khi xử lý.")))
+    info = [_li("Loại", c["loai"]), _li("Đơn vị", c["unit"], unknown=unit_unknown),
+            _li("Người yêu cầu", c["who"]), _li("Nhóm Zalo", c["gname"], bold_value=False),
+            _li("Thời điểm nhận", c["anchor"], bold_value=False), _li("Nền tảng", c["platform"], unknown=c["platform"] == "Chưa rõ"),
+            _li("Số tài khoản", "chưa rõ (xem tệp đính kèm)", unknown=True)]
+    doc = [{"type": "panel", "attrs": {"panelType": "warning" if (low or unit_unknown) else "info"}, "content": head},
+           _h("Thông tin yêu cầu"), {"type": "bulletList", "content": info},
+           _h("Nội dung"), _p(_tx(c["desc"]))]
+    if c["files"]:
+        doc.append(_h("File đính kèm"))
+        doc.append({"type": "bulletList", "content": [{"type": "listItem", "content": [_p(_tx(n, bold=True), _tx((f" ({w})" if w else "") + " - xem mục Attachments của ticket"))]} for n, w in c["files"]]})
+    doc.append(_h("Tin nhắn gốc"))
+    if c["orig"]:
+        doc.append({"type": "blockquote", "content": [_p(_tx(f"[{w}] {who}: ", bold=True), _tx(body)) for w, who, body in c["orig"]]})
+    doc.append(_p(_tx("Mã tin Zalo: "), _tx(", ".join(c["ids"]), code=True)))
+    doc.append(_p(_tx("zalo-ticket-key: "), _tx(c["key"], code=True)))
+    return {"type": "doc", "version": 1, "content": doc}
 
 
 def adf(text: str) -> dict:
@@ -211,13 +305,21 @@ def main() -> int:
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--list-desks", action="store_true", help="liệt kê service desk (id, key, tên) để lấy service_desk_id")
     ap.add_argument("--state-dir", type=Path, default=STATE)
+    ap.add_argument("--site", default="", help="tên site phụ trong cs_config.json > jira_sites (vd csa); bỏ trống = site chính (khối jira)")
     a = ap.parse_args()
 
     cfg_p = a.state_dir / "cs_config.json"
     cfg = json.loads(cfg_p.read_text(encoding="utf-8")) if cfg_p.exists() else {}
-    jc = cfg.get("jira") or {}
-    base = os.environ.get("JIRA_BASE_URL") or jc.get("base_url")
-    email, token = os.environ.get("JIRA_EMAIL"), os.environ.get("JIRA_API_TOKEN")
+    if a.site:
+        # site phụ (vd bản dự phòng cho site khác): cấu hình ở jira_sites.<tên>, khoá JIRA_<TÊN>_EMAIL / JIRA_<TÊN>_API_TOKEN, trạng thái riêng
+        jc = (cfg.get("jira_sites") or {}).get(a.site) or {}
+        tag = re.sub(r"\W", "_", a.site).upper()
+        base = jc.get("base_url")
+        email, token = os.environ.get(f"JIRA_{tag}_EMAIL"), os.environ.get(f"JIRA_{tag}_API_TOKEN")
+    else:
+        jc = cfg.get("jira") or {}
+        base = os.environ.get("JIRA_BASE_URL") or jc.get("base_url")
+        email, token = os.environ.get("JIRA_EMAIL"), os.environ.get("JIRA_API_TOKEN")
     desk = str(jc.get("service_desk_id") or os.environ.get("JIRA_SERVICE_DESK_ID") or "")
     if a.list_desks:  # tra Service Desk ID: chỉ cần base_url + email + token
         if not (base and email and token):
@@ -275,7 +377,7 @@ def main() -> int:
             print("Thiếu Request Type (tên phải khớp jsm_request_type): " + (", ".join(missing) or "không"))
             return 0
 
-    state_p = a.state_dir / "jira_state.json"
+    state_p = a.state_dir / (f"jira_state_{a.site}.json" if a.site else "jira_state.json")
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
     start = parse_time(jc["start"]) if jc.get("start") else None
 
@@ -293,14 +395,15 @@ def main() -> int:
             tickets[r["key"]] = r
 
     cache: dict = {}
-    created = commented = errors = waiting = 0
+    created = commented = errors = waiting = done_n = 0
     # Chế độ dự phòng: Hermes chỉ tạo task sau `backup_grace_minutes` kể từ tin neo nếu trên Jira chưa có task cho tin đó
     # (pilot của huantd tạo trước). 0 hoặc thiếu = tạo ngay.
     grace = timedelta(minutes=float(jc.get("backup_grace_minutes") or 0))
     for key, t in tickets.items():
         led = ledger.get(key)
-        if not led or led.get("status", "open") != "open":
-            continue  # đã loại (not_ours) hoặc đã xong trong chat
+        status = (led or {}).get("status", "open")
+        if not led or status not in ("open", "resolved"):
+            continue  # đã loại (not_ours/duplicate/wrong) hoặc đóng (closed); resolved (xong trong chat) vẫn đẩy rồi chuyển Done
         if key not in state:
             if start and anchor_time(t, led, cache, int(slas.get(t.get("priority") or "medium", 30))) < start:
                 continue  # trước mốc bắt đầu đẩy Jira
@@ -329,12 +432,12 @@ def main() -> int:
                         save()
                     continue
             if a.dry_run:
-                print(f"[dry-run] sẽ tạo: {t['title']} ({issue_type if mode == 'task' else rtype})")
+                print(f"[dry-run] sẽ tạo{' rồi chuyển Done' if status == 'resolved' else ''}: {t['title']} ({issue_type if mode == 'task' else rtype})")
                 created += 1
                 continue
             h = hist_of(t["group_id"], cache)
             fl = files_of(t, h)
-            desc = (task_description(t, key, cfg, h, anchor_time(t, led, cache, 30), fl) if mode == "task"
+            desc = (task_description_adf(t, key, cfg, h, anchor_time(t, led, cache, 30), fl) if mode == "task"
                     else description_of(t, key))
             due = parse_time(t["due"]).astimezone(TZ).strftime("%Y-%m-%d") if t.get("due") else None
             prio = PRIO.get(t.get("priority") or "medium", "Medium")
@@ -344,7 +447,7 @@ def main() -> int:
             if mode == "task":
                 labels = ["ai-drafted", "zalo", "hermes", LOAI.get(t.get("category") or "", (0, "khac"))[1]]
                 f0 = {"project": {"key": proj}, "issuetype": {"name": issue_type},
-                      "summary": summary, "description": adf(desc), "labels": labels}
+                      "summary": summary, "description": desc, "labels": labels}
                 full = dict(f0, priority={"name": prio}, **({"duedate": due} if due else {}))
                 code, res = jira.call("POST", "/rest/api/3/issue", {"fields": full})
                 if code == 400:  # màn hình tạo issue không có priority/duedate: thử lại tối giản
@@ -366,8 +469,13 @@ def main() -> int:
             save()
             created += 1
             print(f"Đã tạo {ik}: {t['title']}")
-            acc = staff.get(t.get("assignee_zalo_id") or "", {}).get("jira")
-            if acc and "@" in acc:  # email → accountId
+            acc = staff.get(t.get("assignee_zalo_id") or "", {}).get("jira") or jc.get("default_assignee")
+            if acc == "me":  # chủ API token (tra một lần qua /myself)
+                if "me" not in cache:
+                    cm, rm = jira.call("GET", "/rest/api/3/myself")
+                    cache["me"] = rm.get("accountId") if cm == 200 else None
+                acc = cache["me"]
+            elif acc and "@" in acc:  # email → accountId
                 c2, r2 = jira.call("GET", f"/rest/api/3/user/search?query={urllib.request.quote(acc)}")
                 acc = r2[0]["accountId"] if c2 == 200 and r2 else None
             if acc:
@@ -422,10 +530,30 @@ def main() -> int:
                 state[key]["comments"] += 1
                 save()
                 commented += 1
+        # ticket đã xong trong chat (resolved): chuyển issue do Hermes tạo sang Done (một lần; thất bại thì lượt sau thử lại)
+        if key in state and not a.dry_run and not state[key].get("existing") and status == "resolved" and not state[key].get("done") and not state[key].get("done_skip"):
+            ok, note = to_done(jira, state[key]["issue"])
+            if ok:
+                state[key]["done"] = True
+                state[key]["done_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+                save()
+                done_n += 1
+                print(f"Đã chuyển {state[key]['issue']} sang Done ({note})")
+                if note != "đã Done sẵn":
+                    jira.call("POST", f"/rest/api/3/issue/{state[key]['issue']}/comment",
+                              {"body": adf("Nhân viên đã xử lý xong yêu cầu này ngay trong chat Zalo; Hermes tự chuyển sang Done.")})
+            elif note == NO_DONE:
+                # workflow/quyền của project không cho tài khoản này đi tới Done (vd project JSM): đánh dấu bỏ qua, không thử lại mãi, không tính lỗi
+                state[key]["done_skip"] = NO_DONE
+                save()
+                print(f"CẢNH BÁO: {state[key]['issue']} không chuyển được sang Done ({note}); bỏ qua ticket này, lượt sau không thử lại")
+            else:
+                print(f"LỖI chuyển {state[key]['issue']} sang Done: {note}")
+                errors += 1
     if waiting and a.dry_run:
         print(f"[dry-run] {waiting} ticket đang chờ (dự phòng, chưa hết {int(grace.total_seconds() // 60)} phút kể từ tin neo)")
-    if created or commented or errors:
-        print(f"Jira: tạo {created}, comment {commented}, lỗi {errors}")
+    if created or commented or done_n or errors:
+        print(f"Jira: tạo {created}, comment {commented}, chuyển Done {done_n}, lỗi {errors}")
     return 1 if errors else 0
 
 

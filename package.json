@@ -18,6 +18,7 @@
     "prune-exports": "node src/pruneExports.js",
     "download-media": "node src/downloadMedia.js",
     "export-hermes": "node src/exportHermes.js",
+    "health": "node src/health.js",
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File stop-logger.ps1",
     "jira": "powershell -NoProfile -ExecutionPolicy Bypass -File jira-toggle.ps1",
     "resume": "powershell -NoProfile -ExecutionPolicy Bypass -File resume-logger.ps1",

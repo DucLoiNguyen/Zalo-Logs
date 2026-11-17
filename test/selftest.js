@@ -11,6 +11,7 @@ import { copyMediaDay, mediaHref, mediaOf } from "../src/media.js";
 import { resetExport, runExport } from "../src/exportHermes.js";
 import { startDailyReport } from "../src/daily.js";
 import { installFileLog } from "../src/filelog.js";
+import { cronIntervalMinutes, cronNextFire, dayRange, evaluate, intervalMinutes, latencyReport, nextState, parseJobs, parseRuns, renderHealthText, thresholdMinutes } from "../src/health.js";
 import { addDays, dayLabel, describe, formatDateTime, parseDay, startOfDay } from "../src/format.js";
 
 const TZ = "Asia/Ho_Chi_Minh";
@@ -294,6 +295,101 @@ assert.equal(photoRow.getCell(6).value.hyperlink, "media/2026-10-20/Test/093000_
   assert.deepEqual([r2.deleted, r2.backedUp, r2.kept], [2, 2, 1]);
   assert.ok(fs.existsSync(path.join(bk, "Zalo_2026-10-30.xlsx")) && fs.existsSync(path.join(bk, "media", "2026-11-01", "N", "b.jpg")));
   assert.equal(pruneExports({ ...o, copyTo: null }).deleted, 0, "không có nơi sao lưu thì không xoá");
+}
+
+// --- health.js: kiểm tra sức khoẻ cron Hermes (hàm thuần, dữ liệu giả)
+{
+  const LIST = `
+  336a7863c414 [active]
+    Name:      zalo-ticket-triage
+    Schedule:  every 30m
+    Repeat:    ∞
+    Next run:  2026-11-12T10:32:26.688784+00:00
+  6ac48c706e70 [active]
+    Name:      zalo-ticket-jira
+    Schedule:  every 5m
+  aaaaaaaaaaaa [paused]
+    Name:      zalo-ticket-triage-shadow
+    Schedule:  7,37 * * * *
+`;
+  const NOW = Date.UTC(2026, 10, 12, 13, 0, 0);
+  const iso = (minAgo) => new Date(NOW - minAgo * 60000).toISOString();
+  const run = (job, minAgo, status = "completed") => `r${job}${minAgo}  ${status}  job=${job}  source=builtin  ${iso(minAgo)}`;
+  const jobs = parseJobs(LIST);
+  assert.deepEqual(jobs.map((j) => [j.id, j.status, j.name, j.schedule]), [
+    ["336a7863c414", "active", "zalo-ticket-triage", "every 30m"], ["6ac48c706e70", "active", "zalo-ticket-jira", "every 5m"],
+    ["aaaaaaaaaaaa", "paused", "zalo-ticket-triage-shadow", "7,37 * * * *"]]);
+  assert.deepEqual([intervalMinutes("every 30m"), intervalMinutes("every 2h"), intervalMinutes("15m"), intervalMinutes("7,37 * * * *")], [30, 120, 15, null]);
+  // ngưỡng: triage 40 phút khi chạy 30 phút, 30 phút khi chạy 15 phút; job khác max(20, 4 × chu kỳ)
+  assert.equal(thresholdMinutes({ name: "zalo-ticket-triage", schedule: "every 30m" }), 40);
+  assert.equal(thresholdMinutes({ name: "zalo-ticket-triage", schedule: "every 15m" }), 30);
+  assert.equal(thresholdMinutes({ name: "zalo-ticket-triage-shadow", schedule: "7,37 * * * *" }), 40);
+  assert.equal(thresholdMinutes({ name: "zalo-ticket-jira", schedule: "every 5m" }), 20);
+
+  const runsOk = parseRuns([run("336a7863c414", 25), run("6ac48c706e70", 3), run("6ac48c706e70", 8, "failed"), "dòng rác"].join("\n"));
+  assert.equal(runsOk.length, 3, "bỏ dòng không đúng định dạng");
+  const ok = evaluate({ jobs, runs: runsOk, now: NOW });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.rows.length, 2, "job paused không được xét");
+  // quá ngưỡng triage (41 phút > 40) -> sự cố, nêu rõ job
+  const late = evaluate({ jobs, runs: parseRuns([run("336a7863c414", 41), run("6ac48c706e70", 3)].join("\n")), now: NOW });
+  assert.equal(late.ok, false);
+  assert.match(late.reasons[0], /zalo-ticket-triage: .*41 phút trước, ngưỡng 40/);
+  // lượt "failed" không tính là hoàn tất; chưa có lượt nào thì không báo (job mới tạo)
+  assert.equal(evaluate({ jobs, runs: parseRuns(run("336a7863c414", 10, "failed") + "\n" + run("6ac48c706e70", 2)), now: NOW }).ok, true);
+  // WSL / 9router không phản hồi
+  assert.deepEqual(evaluate({ jobs: [], runs: [], now: NOW, wslOk: false }).reasons.length, 1);
+  assert.match(evaluate({ jobs, runs: runsOk, now: NOW, httpOk: false }).reasons[0], /9router/);
+
+  // một lần mỗi đợt + báo phục hồi
+  let st = nextState({ alert: false }, late, NOW);
+  assert.equal(st.notify, "alert");
+  st = nextState(st.state, late, NOW + 300000);
+  assert.equal(st.notify, null, "đang trong đợt sự cố thì không báo lại");
+  st = nextState(st.state, ok, NOW + 600000);
+  assert.equal(st.notify, "recovered");
+  assert.equal(nextState(st.state, ok, NOW + 900000).notify, null);
+  assert.equal(nextState(undefined, ok, NOW).notify, null, "chưa có trạng thái và đang ổn thì im lặng");
+
+  const txt = renderHealthText({ now: NOW, result: late, state: { alert: true, since: NOW } });
+  assert.match(txt, /SỰ CỐ/);
+  assert.match(txt, /QUÁ NGƯỠNG/);
+  assert.match(renderHealthText({ now: NOW, result: ok, state: {} }), /BÌNH THƯỜNG/);
+  assert.ok(!/api[_-]?key|token|password/i.test(txt), "HEALTH.txt không chứa bí mật");
+
+  // báo cáo độ trễ: ngày 12/11 (giờ VN); job 5 phút có khoảng trống 2 giờ
+  const T = (h, m) => Date.UTC(2026, 10, 12, h - 7, m); // giờ VN -> ms
+  const rr = [];
+  for (let m = 0; m <= 60; m += 5) rr.push({ job: "6ac48c706e70", status: "completed", ts: T(8, m % 60) + Math.floor(m / 60) * 3600000 });
+  rr.push({ job: "6ac48c706e70", status: "completed", ts: T(11, 0) }, { job: "6ac48c706e70", status: "completed", ts: T(11, 5) });
+  const rep = latencyReport({ jobs, runs: rr, dateStr: "2026-11-12" });
+  assert.match(rep, /# Độ trễ cron Hermes ngày 2026-11-12/);
+  assert.match(rep, /\| zalo-ticket-jira \| every 5m \| 15 \|/);
+  assert.match(rep, /\| 1 \| \d+ phút \|/, "1 khoảng > 2× chu kỳ (khoảng trống buổi sáng sau 9h)");
+  assert.match(rep, /\| zalo-ticket-triage \| every 30m \| 0 \| - \|/, "job không có lượt nào trong ngày");
+  // job shadow theo cron "2,17,32,47 0-12 * * 1-5" (UTC; 7h-19h VN): chu kỳ 15 -> ngưỡng 30; ngoài khung giờ/cuối tuần không báo giả
+  {
+    const SH = "2,17,32,47 0-12 * * 1-5";
+    const shadowJob = { id: "048078c2e3b1", status: "active", name: "zalo-ticket-triage-shadow", schedule: SH };
+    assert.equal(cronIntervalMinutes(SH), 15);
+    assert.equal(thresholdMinutes(shadowJob), 30);
+    assert.equal(cronIntervalMinutes("*/15 * * * *"), 15);
+    assert.equal(cronIntervalMinutes("0 9 * * *"), 60);
+    assert.equal(cronNextFire("not a cron", 0, 1e15), null);
+    const U = (d, h, m) => Date.UTC(2026, 10, d, h, m); // 13/11/2026 là thứ Sáu
+    assert.equal(cronNextFire(SH, U(13, 12, 47) + 20000, U(16, 12, 0)), U(16, 0, 2), "sau 12:47 thứ Sáu lượt kế là 00:02 thứ Hai");
+    const run = (at) => parseRuns(`rs1  completed  job=048078c2e3b1  source=builtin  ${new Date(at).toISOString()}`);
+    const chk = (now, lastAt) => evaluate({ jobs: [shadowJob], runs: run(lastAt), now });
+    assert.equal(chk(U(13, 4, 40), U(13, 4, 32)).ok, true, "đang chạy đều trong khung giờ");
+    assert.equal(chk(U(13, 20, 0), U(13, 12, 47)).ok, true, "tối thứ Sáu (ngoài khung giờ) không báo");
+    assert.equal(chk(U(15, 6, 0), U(13, 12, 47)).ok, true, "thứ Bảy không báo");
+    assert.equal(chk(U(16, 0, 10), U(13, 12, 47)).ok, true, "sáng thứ Hai: vừa đến hạn 00:02, chưa quá 15 phút lỡ");
+    const missed = chk(U(16, 0, 40), U(13, 12, 47));
+    assert.equal(missed.ok, false, "thứ Hai đã lỡ 00:02 và 00:17 quá lâu thì báo");
+    assert.match(missed.reasons[0], /zalo-ticket-triage-shadow/);
+    assert.equal(chk(U(13, 5, 30), U(13, 4, 32)).ok, false, "giữa khung giờ mà 58 phút không hoàn tất thì báo");
+  }
+  assert.deepEqual(dayRange("2026-11-12"), [Date.UTC(2026, 10, 11, 17), Date.UTC(2026, 10, 12, 17)]);
 }
 
 db.close();

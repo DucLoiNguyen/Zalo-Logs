@@ -17,6 +17,7 @@ Node >= 20 (máy dev v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, `
 - Script `.ps1` chạy trên Windows (UTF-8 BOM nếu có tiếng Việt); script trong `hermes-ticket/` chạy trong WSL; sửa skill/script xong phải chép sang profile Hermes.
 - Sửa ở `src/` chỉ có hiệu lực sau khi khởi động lại tool (`npm run stop` rồi `npm run resume`).
 - Không commit/push khi chưa được người dùng đồng ý.
+- Khi cron shadow (`zalo-ticket-triage-shadow`) đang chạy: MỖI lần sửa skill/script Hermes (kể cả chép sang `skills-shadow/`) phải ghi 1 dòng vào `docs/WORKLOG.md` kèm ngày GIỜ (`YYYY-MM-DD HH:MM`) và việc đã đổi, để so sánh shadow biết kết quả từ giờ nào dùng mã nào.
 
 ## Lệnh
 - `npm run login`: đăng nhập QR, lưu `data/credentials.json`. `npm run groups [-- từ khoá]`: liệt kê nhóm.
@@ -29,6 +30,8 @@ Node >= 20 (máy dev v25), ES modules, `better-sqlite3`, `mongodb`, `exceljs`, `
 - `npm run stop` / `npm run resume`: tắt hẳn (Disable task + dừng `start.js`) / bật lại và chạy ngay. Không gỡ task.
 - `npm run jira -- on|off|status [-FromNow]`: bật/tắt đẩy ticket lên Jira (đổi `jira.enabled` trong `cs_config.json`, hiệu lực ở lượt cron kế tiếp).
 - `.\setup-autostart.ps1 [-Remove]`: Task Scheduler chạy `node src/start.js` khi đăng nhập + lặp mỗi 5 phút (`IgnoreNew`) để chạy lại sau khi watchdog thoát. Task không chuyển hướng output.
+- `.\setup-hermes-autostart.ps1 [-DryRun|-Rollback]`: đăng ký lại task `9router` + `HermesGateway` (đăng nhập + lặp 5 phút `IgnoreNew` + Kernel-Power 107 "ngủ dậy"; gateway chờ 9router trả 200 ở `/v1/models`); XML gốc ở `data/task-backup/<tên>-original.xml` (`-Rollback` trả lại). Bật nhật ký Task Scheduler cần admin: `wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true`.
+- `.\setup-health.ps1 [-OneDriveDir <thư mục>] [-Remove]` + `npm run health [-- --dry-run|--daily]`: task `hermes-health` mỗi 5 phút (`src/health.js`) báo toast + `data/health/HEALTH.txt` (+ chép OneDrive) khi cron Hermes quá ngưỡng (triage 40 phút khi chạy 30 phút) hoặc 9router/WSL không phản hồi; một lần mỗi đợt + báo phục hồi; không tự khởi động lại gì; ghi `data/health/cron-latency-<ngày>.md` hằng ngày.
 - `npm run selftest`: test bằng dữ liệu giả, không cần mạng.
 
 ## Kiến trúc (src/)
@@ -47,7 +50,7 @@ Luồng chính: `start.js` → `store.js` (SQLite + Atlas) → `daily.js` / `med
 - Chỉ 1 listener/tài khoản: mở Zalo Web cùng lúc sẽ ngắt kết nối.
 - Gửi vào "Cloud của tôi" (chat với chính mình) KHÔNG được: zca-js trả lỗi 114 "Tham số không hợp lệ". `reportTo` phải là user khác hoặc nhóm.
 - `api.getGroupChatHistory` (HTTP) đã bị Zalo gỡ (404); backfill dùng `listener.requestOldMessages(ThreadType.Group, lastMsgId)` + sự kiện `old_messages`.
-- Task Scheduler "restart on failure" KHÔNG chạy khi thoát mã khác 0; đừng dựa vào nó. `LastTaskResult` 2147946720 (0x800710E0) là bình thường (lần lặp bị bỏ vì tool đang chạy).
+- Task Scheduler "restart on failure" KHÔNG chạy khi thoát mã khác 0; đừng dựa vào nó. Task bọc `wsl.exe` (9router, HermesGateway) từng tự tắt: máy ngủ làm VM WSL chết, và `wsl.exe` bị SIGINT từ Relay; nay có trigger lặp 5 phút. Cập nhật (`Register-ScheduledTask -Force`) một task đang chạy sẽ dừng tiến trình của nó. `LastTaskResult` 2147946720 (0x800710E0) là bình thường (lần lặp bị bỏ vì tool đang chạy).
 - Ảnh/file/video: link Zalo có thể hết hạn (thử được tin 5 ngày trước, chưa biết thời hạn thật), nên tải ngay khi tin đến. `exports/media` chứa dữ liệu nhạy cảm và OneDrive đồng bộ lên đám mây.
 - Bí mật: `data/`, `.env`, `exports/`, `config/config.json` (mẫu: `config/config.example.json`) đều trong `.gitignore`. Atlas cần whitelist IP và user DB. `exports/~$*.xlsx` là file tạm của Excel, bỏ qua.
 - Ngày không có tin thì không có file `exports/Zalo_<ngày>.xlsx`, không phải lỗi.
@@ -61,9 +64,11 @@ Luồng chính: `start.js` → `store.js` (SQLite + Atlas) → `daily.js` / `med
 - Backfill: chưa xác minh thứ tự trang của `requestOldMessages` nên chưa dừng sớm khi gặp tin đã có.
 - Lịch sử git đã viết lại ngày 09/11 để xoá `hermes-ticket/config/cs_config.json` (mã commit đổi hết; clone khác phải clone lại). Còn bản sao lưu cũ `D:\zalo-logs-backup-2026-11-09.bundle` chứa dữ liệu nhạy cảm: xoá khi không cần nữa. `TRIEN-KHAI.md` vẫn ghi ID của người nhận ticket mặc định (của chính chủ repo).
 - Hermes: nhận diện nhân viên Misa chỉ theo tên; ticket "Thu quỹ phòng" (nội bộ) và ticket trùng THPT Hướng Hóa chưa xử lý; ticket quá hạn chưa có người nhận; `unit`/`platform` do model điền có thể sai.
-- Hermes: quyết định có tạo ticket cho yêu cầu đã xong trong chat (`resolved_in_chat`) không; chưa kiểm tra chất lượng ticket so với tin gốc.
-- Jira: đang BẬT chế độ dự phòng (chờ 20 phút, chỉnh được); chưa có task nào do Hermes tạo thật; accountId mới điền cho 1 nhân viên; có thể tạo trùng nếu chỉ mục Jira chậm.
-- Mã mới chưa commit (nhiều file); chưa theo dõi đủ 5 ngày làm việc.
+- Hermes (CUTOVER 13/11): job cũ `zalo-ticket-triage` (agent) và cron shadow đã GỠ; thay bằng `zalo-ticket-triage-llm` (id e61be1d56a05, `2,17,32,47 0-12 * * 1-5` UTC = 7–19 giờ VN thứ Hai–Sáu, `triage-llm-real.sh` trên state thật, `--no-agent`). Dựng lại job cũ: cấu hình ở `data/cron-backup-20261113-080053/jobs.json`, skill agent cũ ở profile `skills-old-agent-backup-20261113-080007`; khôi phục state: `data/state-backup-20261113-080053` (trước cutover) hoặc `-074747` (trước bước 2). Rollback khẩn: `hermes -p ticket cron pause e61be1d56a05`.
+- Hermes cần theo dõi sau cutover: đo token thật 3 ngày (bước 2 xử lý 209 dòng hết 209.179 token; lượt thường 30–110k); mở `review.csv` ([Cần xem]) hằng ngày trong OneDrive `zalo/tickets/`; xem `data/health/cron-latency-<ngày>.md`; nhóm `internal` dùng Haiku nên tốn token hơn; 10 ticket mới ở bước 2 là resolved từ `resolved_in_chat` (đã qua kiểm tra mã tin NV).
+- Jira ĐÃ ĐỔI SITE (16/11 11:01 giờ VN) sang `https://loind.atlassian.net`, project `KAN` (Jira Software, chế độ `task`, loại `Task`) và đã BẬT (`jira.start` = 16/11 11:01, nên chỉ ticket mới từ mốc đó mới đẩy; `jira_state.json` đã đặt về `{}`, bản site cũ ở `data/jira-switch-backup-20261116-040017/`). Email/token ở `.env` của profile (bạn tự đặt; nếu `.env` có `JIRA_BASE_URL` cũ thì nó ghi đè `base_url`). Chưa gán người xử lý (site mới chưa có `staff.*.jira`, task Unassigned); các ticket open cũ (trước mốc) không đẩy; ticket `resolved` (xong trong chat) cũng được đẩy rồi chuyển Done (từ 16/11, `jira_push.py`). Chốt chặn Jira trong `triage-llm-real.sh` đã gỡ.
+- Mã triage_llm/health/cutover nằm trên nhánh `triage-llm`: chỉ `1133afd` đã push, các thay đổi sau đó CHƯA commit/push, chưa merge.
+- Chưa bật nhật ký Task Scheduler (cần admin: `wevtutil sl Microsoft-Windows-TaskScheduler/Operational /e:true`); chưa rõ vì sao `wsl.exe` của task 9router/HermesGateway bị SIGINT (máy ngủ chắc chắn làm VM WSL chết); `triage_llm` nhóm nội bộ cần `TRIAGE_INTERNAL_MODEL` Haiku (Gemini trả rỗng); bước resolve và gộp ticket mới đo trên mẫu nhỏ.
 
 ## Tài liệu chi tiết
 - `hermes-ticket/CLAUDE.md`: Hermes, cron, Jira. `hermes-ticket/TRIEN-KHAI.md`: triển khai. `docs/WORKLOG.md`: nhật ký làm việc.
