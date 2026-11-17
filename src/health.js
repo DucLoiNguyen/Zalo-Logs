@@ -56,9 +56,62 @@ export function intervalMinutes(schedule) {
   return u.startsWith("m") ? n : u.startsWith("h") ? n * 60 : n * 1440;
 }
 
+// ---- lịch kiểu cron (vd job shadow "2,17,32,47 0-12 * * 1-5"). Hermes đánh giá cron theo múi giờ hệ thống của WSL = UTC (đã kiểm chứng:
+// "7-19" cho lượt đầu lúc 07:02 UTC), nên 7h-19h giờ VN = giờ 0-12 UTC.
+function cronField(text, min, max) {
+  const out = new Set();
+  for (const part of String(text).split(",")) {
+    const m = part.match(/^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/);
+    if (!m) return null;
+    let [lo, hi] = m[1] === "*" ? [min, max] : m[1].split("-").map(Number);
+    if (m[1] !== "*" && !m[1].includes("-")) hi = m[2] ? max : lo; // "5/10" = từ 5 đến hết
+    const step = m[2] ? Number(m[2]) : 1;
+    if (!(lo >= min && hi <= max && lo <= hi && step > 0)) return null;
+    for (let v = lo; v <= hi; v += step) out.add(v);
+  }
+  return out;
+}
+
+/** "2,17,32,47 0-12 * * 1-5" -> {min, hour, dom, mon, dow} (tập số) hoặc null nếu không phải cron 5 trường đơn giản. */
+export function parseCron(expr) {
+  const f = String(expr || "").trim().split(/\s+/);
+  if (f.length !== 5) return null;
+  const c = { min: cronField(f[0], 0, 59), hour: cronField(f[1], 0, 23), dom: cronField(f[2], 1, 31), mon: cronField(f[3], 1, 12), dow: cronField(f[4], 0, 7) };
+  if (Object.values(c).some((x) => !x)) return null;
+  if (c.dow.has(7)) c.dow.add(0);
+  return c;
+}
+
+const cronMatches = (c, ms) => {
+  const d = new Date(ms);
+  return c.min.has(d.getUTCMinutes()) && c.hour.has(d.getUTCHours()) && c.dom.has(d.getUTCDate()) && c.mon.has(d.getUTCMonth() + 1) && c.dow.has(d.getUTCDay());
+};
+
+/** Lần chạy theo lịch đầu tiên SAU `afterMs` (và ≤ `untilMs`), hoặc null. Dò từng phút, tối đa 8 ngày. */
+export function cronNextFire(expr, afterMs, untilMs) {
+  const c = parseCron(expr);
+  if (!c) return null;
+  let t = Math.floor(afterMs / 60000) * 60000 + 60000;
+  for (let i = 0; i < 8 * 1440 && t <= untilMs; i++, t += 60000) if (cronMatches(c, t)) return t;
+  return null;
+}
+
+/** Chu kỳ (phút) của cron theo trường phút: khoảng cách lớn nhất giữa các phút trong giờ ("2,17,32,47" -> 15). */
+export function cronIntervalMinutes(expr) {
+  const c = parseCron(expr);
+  if (!c) return null;
+  const m = [...c.min].sort((a, b) => a - b);
+  if (m.length === 1) return 60;
+  let gap = m[0] + 60 - m[m.length - 1];
+  for (let i = 1; i < m.length; i++) gap = Math.max(gap, m[i] - m[i - 1]);
+  return gap;
+}
+
+const scheduleInterval = (schedule) => intervalMinutes(schedule) ?? cronIntervalMinutes(schedule);
+
 /** Ngưỡng (phút) kể từ lần hoàn tất cuối mà job bị coi là chậm/chết. */
 export function thresholdMinutes(job) {
-  const iv = intervalMinutes(job.schedule);
+  const iv = scheduleInterval(job.schedule);
   if (/triage/i.test(job.name)) {
     const m = iv ?? 30; // lịch kiểu cron của job shadow: coi như 30 phút
     return m <= 15 ? 30 : m <= 30 ? 40 : m + 15;
@@ -80,7 +133,13 @@ export function evaluate({ jobs, runs, now, wslOk = true, httpOk = true }) {
       const last = done.length ? Math.max(...done) : null;
       const thr = thresholdMinutes(job);
       const age = last == null ? null : Math.round((now - last) / 60000);
-      const late = age != null && age > thr;
+      let late = age != null && age > thr;
+      if (late && parseCron(job.schedule)) {
+        // job theo cron có khung giờ/ngày: chỉ báo khi một lượt ĐÃ ĐẾN HẠN sau lần hoàn tất cuối mà lỡ quá (ngưỡng - chu kỳ) phút;
+        // ngoài khung giờ hoặc cuối tuần thì không có lượt nào đến hạn nên không báo.
+        const due = cronNextFire(job.schedule, last, now);
+        late = due != null && (now - due) / 60000 > thr - (scheduleInterval(job.schedule) ?? 0);
+      }
       rows.push({ ...job, last, age, thr, late });
       if (late) reasons.push(`${job.name}: lần hoàn tất cuối ${fmtVN(last)} (${age} phút trước, ngưỡng ${thr} phút)`);
     }

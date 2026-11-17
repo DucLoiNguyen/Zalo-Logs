@@ -133,8 +133,8 @@ def _core(name: str) -> str:
 
 def resolve_rule(prev: dict, staff: dict, msgs: list[dict], key: str, recent: int = 10) -> str | None:
     """Tin nhân viên `staff` có đủ căn cứ để đóng ticket `key` (bản ghi ledger `prev`) không? Trả tên luật hoặc None:
-      (a) tin nêu đúng đơn vị hoặc tên khách của ticket;
-      (b) @tag đúng khách;
+      (a) tin nêu đúng tên khách ("nêu đúng tên khách") hoặc đơn vị ("nêu đúng đơn vị") của ticket;
+      (b) @tag đúng khách ("tag đúng khách");
       (c) trong `recent` tin gần nhất trước tin NV chỉ liên quan đúng MỘT ticket đang mở (số ứng viên do hàm gọi tính: xem resolve_unique).
     Hàm này xét (a) và (b); (c) do resolve_unique xét vì cần so với các ticket khác."""
     text = " ".join(fold(staff["text"]).split())
@@ -142,9 +142,15 @@ def resolve_rule(prev: dict, staff: dict, msgs: list[dict], key: str, recent: in
     core = _core(prev.get("unit") or "")
     if customer and "@" + customer in text:
         return "tag đúng khách"
-    if (core and len(core) >= 4 and core in text) or (customer and len(customer) >= 4 and customer in text):
-        return "nêu đúng đơn vị/tên khách"
+    if customer and len(customer) >= 4 and customer in text:
+        return "nêu đúng tên khách"
+    if core and len(core) >= 4 and core in text:
+        return "nêu đúng đơn vị"
     return None
+
+
+# luật mạnh: đủ để MỘT tin nhân viên đóng từ 2 ticket trở lên (mỗi ticket phải có @tag hoặc tên khách RIÊNG của nó)
+STRONG_RULES = ("tag đúng khách", "nêu đúng tên khách")
 
 
 def resolve_unique(opens: dict[str, dict], staff: dict, msgs: list[dict], recent: int = 10) -> str | None:

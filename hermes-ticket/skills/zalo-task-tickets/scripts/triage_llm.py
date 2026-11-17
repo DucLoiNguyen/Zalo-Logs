@@ -482,11 +482,96 @@ def pipeline(group: str, cfg: dict, state: Path, mem: Path, usage: Usage, max_li
         tasks, stats["merged"] = cover.merge_split(tasks, msgs)
         if stats["merged"]:
             log(f"[{group}] gộp {stats['merged']} ticket bị tách (cùng người gửi ≤3 phút, cùng loại, cùng đơn vị)")
+    if os.environ.get("TRIAGE_DEDUP", "1") != "0":
+        tasks, ev = redirect_covered(tasks, create_tickets.load_ledger(state), group)
+        stats["dedup_guard"] = len(ev)
+        stats["dedup_events"] = ev
+    if os.environ.get("TRIAGE_RESOLVE_EVIDENCE", "1") != "0" and mode != "internal":
+        tasks, rev = validate_resolved(tasks, msgs, create_tickets.load_ledger(state), group)
+        stats["resolved_downgraded"] = rev
     if os.environ.get("TRIAGE_RESOLVE", "1") != "0" and mode != "internal":
         tasks += resolve_step(group, state, usage, window, msgs, opens, tasks, stats)
     stats["tasks_final"] = len(tasks)
     stats["synthesized"] = len(synthesized)
     return {"status": "ok", "win": win, "tasks": tasks, "notes": notes, "stats": stats}
+
+
+def redirect_covered(tasks: list[dict], ledger: dict, group: str) -> tuple[list[dict], list[dict]]:
+    """Chốt chặn chống trùng: ticket ĐỀ XUẤT MỚI mà mỏ neo hoặc tin nguồn đã nằm trong `seen_ids` của một ticket cũ cùng nhóm thì KHÔNG tạo mới,
+    chuyển thành cập nhật ticket cũ đó (mỏ neo = mỏ neo của ticket cũ; tin nào chưa có thì create_tickets thêm vào, đã có hết thì bỏ qua).
+    Không đổi tiêu đề/đơn vị/trạng thái của ticket cũ qua đường này: trạng thái giữ nguyên (resolved -> resolved_in_chat, còn lại -> open);
+    chuyển trạng thái chỉ qua bước resolve (có chốt chặn bằng mã). Trả (danh sách mới, nhật ký [{group, anchor, old_key, new_ids}])."""
+    cover: dict[str, str] = {}
+    for key, rec in ledger.items():
+        if key.startswith(group + ":"):
+            for i in [key.split(":", 1)[1], *map(str, rec.get("seen_ids") or [])]:
+                cover.setdefault(i, key)
+    out, events, by_key = [], [], {}
+    for t in tasks:
+        rid = str(t.get("request_message_id"))
+        ids = [rid, *[str(i) for i in t.get("source_message_ids") or []]]
+        own_key = f"{group}:{rid}"
+        if own_key in ledger:           # model đã dùng đúng mỏ neo của ticket cũ: đây đã là cập nhật
+            out.append(t)
+            continue
+        hits = [cover[i] for i in ids if i in cover]
+        if not hits:
+            out.append(t)
+            continue
+        target = cover.get(rid) or max(set(hits), key=hits.count)
+        prev = ledger[target]
+        seen = {target.split(":", 1)[1], *map(str, prev.get("seen_ids") or [])}
+        new_ids = [i for i in dict.fromkeys(ids) if i not in seen]
+        events.append({"group": group, "anchor": rid, "old_key": target, "new_ids": new_ids})
+        log(f"[{group}] chốt chặn chống trùng: tin neo {rid} đã có trong ticket cũ {target} -> cập nhật ticket cũ (+{len(new_ids)} tin mới)")
+        upd = dict(t)
+        upd.update({"request_message_id": target.split(":", 1)[1], "source_message_ids": list(dict.fromkeys(ids)), "title": prev.get("title") or t.get("title"),
+                    "unit": None, "platform": None, "status_hint": "resolved_in_chat" if prev.get("status") == "resolved" else "open"})
+        if target in by_key:            # nhiều đề xuất cùng trỏ vào một ticket cũ: gộp tin nguồn
+            old = by_key[target]
+            old["source_message_ids"] = sorted(set(old["source_message_ids"]) | set(upd["source_message_ids"]))
+            continue
+        by_key[target] = upd
+        out.append(upd)
+    return out, events
+
+
+def validate_resolved(tasks: list[dict], msgs: list[dict], ledger: dict, group: str) -> tuple[list[dict], list[dict]]:
+    """Ticket MỚI đề xuất `resolved_in_chat` chỉ được giữ resolved khi model nêu `resolved_evidence_message_id` thoả cả 4 điều:
+    (1) mã nằm trong cửa sổ của nhóm, (2) nằm SAU tin neo, (3) người gửi là nhân viên (role NV, không phải khách/Misa),
+    (4) không dùng chung: không ticket nào khác (trong lượt này hoặc trong sổ cũ của nhóm) cũng dùng/chứa mã đó.
+    Ngược lại đặt open và ghi log lý do (chỉ mã). Mã suy từ lịch sử bằng code KHÔNG được tính. Không áp cho ticket cập nhật ticket cũ.
+    Trả (tasks, nhật ký [{group, anchor, evidence, reason}])."""
+    pos = {m["id"]: i for i, m in enumerate(msgs)}
+    by_id = {m["id"]: m for m in msgs}
+    new = [t for t in tasks if f"{group}:{t.get('request_message_id')}" not in ledger and t.get("status_hint") == "resolved_in_chat"]
+    used: dict[str, int] = {}
+    for t in new:
+        ev = str(t.get("resolved_evidence_message_id") or "").strip()
+        if ev:
+            used[ev] = used.get(ev, 0) + 1
+    in_old = {str(i) for k, r in ledger.items() if k.startswith(group + ":") for i in (r.get("seen_ids") or [])}
+    events = []
+    for t in new:
+        anchor = str(t.get("request_message_id"))
+        ev = str(t.get("resolved_evidence_message_id") or "").strip()
+        m = by_id.get(ev)
+        if not ev:
+            reason = "thiếu mã tin nhân viên"
+        elif m is None:
+            reason = "mã không nằm trong cửa sổ của nhóm"
+        elif anchor not in pos or pos[ev] <= pos[anchor]:
+            reason = "mã không nằm sau tin neo"
+        elif m["role"] != "NV" or cover.is_misa(m["name"]):
+            reason = "người gửi không phải nhân viên (khách hoặc Misa)"
+        elif used.get(ev, 0) > 1 or ev in in_old:
+            reason = "mã dùng chung với ticket khác"
+        else:
+            continue
+        t["status_hint"] = "open"
+        events.append({"group": group, "anchor": anchor, "evidence": ev or None, "reason": reason})
+        log(f"[{group}] ticket mới {anchor}: resolved -> open ({reason}; mã {ev or 'không có'})")
+    return tasks, events
 
 
 def open_lines(opens: str) -> dict[str, str]:
@@ -535,21 +620,22 @@ def resolve_step(group: str, state: Path, usage: Usage, window: str, msgs: list[
         return errs
 
     def gate(proposed: list[dict]) -> list[dict]:
-        """Chốt chặn bằng mã: chỉ đóng khi (a) tin NV nêu đúng đơn vị/tên khách, (b) @tag đúng khách, hoặc (c) chỉ có đúng 1 ticket mở trong
-        10 tin gần nhất; tối đa 3 ticket mỗi tin NV (tin chung chung đóng nhiều ticket thì không đóng cái nào)."""
+        """Chốt chặn bằng mã: chỉ đóng khi (a) tin NV nêu đúng tên khách/đơn vị, (b) @tag đúng khách, hoặc (c) chỉ có đúng 1 ticket mở trong
+        10 tin gần nhất. Một mã tin NV mà model đề xuất đóng TỪ 2 TICKET TRỞ LÊN (cùng nhóm) thì không đóng ticket nào, trừ khi MỖI ticket
+        đều có @tag hoặc tên khách riêng của nó trong tin đó (và tối đa 3 ticket)."""
         per_msg: dict[str, list[dict]] = {}
         for r in proposed:
             staff_msg = by_id[r["mid"]]
             rule = cover.resolve_rule(open_recs[r["key"]], staff_msg, msgs, r["key"]) or \
                 ("chỉ 1 ticket mở trong 10 tin gần nhất" if cover.resolve_unique(open_recs, staff_msg, msgs) == r["key"] else None)
-            if rule:
-                per_msg.setdefault(r["mid"], []).append({**r, "rule": rule})
+            per_msg.setdefault(r["mid"], []).append({**r, "rule": rule})
         out = []
         for mid, lst in per_msg.items():
-            if len(lst) > 3:
-                log(f"[{group}] tin NV {mid} đóng {len(lst)} ticket (> 3): quá chung chung, không đóng cái nào")
-                continue
-            out += lst
+            if len(lst) >= 2:
+                if len(lst) > 3 or not all(x["rule"] in cover.STRONG_RULES for x in lst):
+                    log(f"[{group}] tin NV {mid} đề xuất đóng {len(lst)} ticket: không phải ticket nào cũng có @tag/tên khách riêng (hoặc > 3): không đóng cái nào")
+                    continue
+            out += [x for x in lst if x["rule"]]
         stats["resolve_proposed"], stats["resolve_rejected"] = len(proposed), len(proposed) - len(out)
         return out
 

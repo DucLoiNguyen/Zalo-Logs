@@ -266,7 +266,7 @@ class TwoStepTests(Base):
 
     def test_resolved_in_chat_van_tao_ticket_trang_thai_resolved(self):
         self.llm.reply(self.labels(m1={"label": "resolved_in_chat", "anchor": "m2"}, m2={"label": "resolved_in_chat"}, m4={"label": "none"}))
-        self.llm.reply({"tasks": [task(request_message_id="m2", source_message_ids=["m1", "m2"], status_hint="open")]})  # model quên đặt hint: nhãn bước 1 quyết định
+        self.llm.reply({"tasks": [task(request_message_id="m2", source_message_ids=["m1", "m2"], status_hint="open", resolved_evidence_message_id="m3")]})  # model quên hint: nhãn bước 1 quyết định; m3 là tin NV sau tin neo
         _, out = self.run_main()
         self.assertEqual(self.ledger()["g1:m2"]["status"], "resolved")
         self.assertEqual(self.cursor("g1"), 4)
@@ -642,12 +642,37 @@ class ResolveGateTests(Base):
         self.run_main()
         self.assertEqual(self.status()["g1:t1"], "open")
 
-    def test_toi_da_3_ticket_moi_tin_nv(self):
-        self.seed([(f"t{i}", f"Khách {i}", f"Xã Đơn Vị{i}") for i in range(1, 5)], "Xã Đơn Vị1, Xã Đơn Vị2, Xã Đơn Vị3, Xã Đơn Vị4 đã tạo tài khoản xong")
+    def test_mot_tin_nv_dong_2_ticket_tro_len_chi_hop_le_khi_moi_ticket_co_ten_khach_rieng(self):
+        # chỉ nêu đơn vị của hai ticket -> không đóng cái nào
+        self.seed([("t1", "Nguyễn Văn An", "Xã Đơn Vị1"), ("t2", "Trần Thị Bình", "Xã Đơn Vị2")], "Xã Đơn Vị1 và Xã Đơn Vị2 đã tạo tài khoản xong")
+        self.reply("t1", "t2")
+        self.run_main()
+        self.assertEqual(set(self.status().values()), {"open"})
+        # nêu tên khách RIÊNG của từng ticket -> đóng cả hai
+        self.seed([("t1", "Nguyễn Văn An", "Xã Đơn Vị1"), ("t2", "Trần Thị Bình", "Xã Đơn Vị2")], "Nguyễn Văn An và Trần Thị Bình đã tạo tài khoản xong")
+        self.reply("t1", "t2")
+        self.run_main()
+        self.assertEqual(set(self.status().values()), {"resolved"})
+
+    def test_hai_ticket_mot_co_tag_mot_chi_co_don_vi_thi_khong_dong_cai_nao(self):
+        self.seed([("t1", "Nguyễn Văn An", "Xã Đơn Vị1"), ("t2", "Trần Thị Bình", "Xã Đơn Vị2")], "@Nguyễn Văn An xong rồi, Xã Đơn Vị2 cũng xong")
+        self.reply("t1", "t2")
+        self.run_main()
+        self.assertEqual(set(self.status().values()), {"open"})
+
+    def test_hai_ticket_deu_co_tag_rieng_thi_dong_ca_hai(self):
+        self.seed([("t1", "Nguyễn Văn An", "Xã Đơn Vị1"), ("t2", "Trần Thị Bình", "Xã Đơn Vị2")], "@Nguyễn Văn An @Trần Thị Bình đã tạo tài khoản")
+        self.reply("t1", "t2")
+        self.run_main()
+        self.assertEqual(set(self.status().values()), {"resolved"})
+
+    def test_toi_da_3_ticket_moi_tin_nv_du_co_ten_khach_rieng(self):
+        names = ["Nguyễn Văn An", "Trần Thị Bình", "Lê Hoàng Cường", "Phạm Minh Dũng"]
+        self.seed([(f"t{i}", n, f"Xã Đơn Vị{i}") for i, n in enumerate(names, 1)], ", ".join(names) + " đã tạo tài khoản xong")
         self.reply("t1", "t2", "t3", "t4")
         self.run_main()
-        self.assertEqual(set(self.status().values()), {"open"})                    # 4 ticket > 3: quá chung chung, không đóng cái nào
-        (self.state / "cursors" / "g1.json").write_text(json.dumps({"line": 4}), encoding="utf-8")   # lượt sau: đọc lại tin NV
+        self.assertEqual(set(self.status().values()), {"open"})                    # 4 ticket > 3: không đóng cái nào
+        (self.state / "cursors" / "g1.json").write_text(json.dumps({"line": 4}), encoding="utf-8")
         self.reply("t1", "t2", "t3")
         self.run_main()
         self.assertEqual(sorted(k for k, v in self.status().items() if v == "resolved"), ["g1:t1", "g1:t2", "g1:t3"])
@@ -657,8 +682,10 @@ class ResolveRuleUnitTests(unittest.TestCase):
     def test_core_bo_tien_to_va_dau(self):
         self.assertEqual(cv._core("Xã Bình Yên"), "binh yen")
         self.assertEqual(cv._core("Sở Tư pháp Hà Nam"), "tu phap ha nam")
-        self.assertEqual(cv.resolve_rule({"unit": "Xã Bình Yên"}, {"text": "xa binh yen xong roi"}, [], "g:k"), "nêu đúng đơn vị/tên khách")
+        self.assertEqual(cv.resolve_rule({"unit": "Xã Bình Yên"}, {"text": "xa binh yen xong roi"}, [], "g:k"), "nêu đúng đơn vị")
         self.assertEqual(cv.resolve_rule({"customer": "Lê Văn B"}, {"text": "@Lê Văn B nhé"}, [], "g:k"), "tag đúng khách")
+        self.assertEqual(cv.resolve_rule({"customer": "Lê Văn B", "unit": "Xã Bình Yên"}, {"text": "Lê Văn B và xa binh yen xong"}, [], "g:k"), "nêu đúng tên khách")   # tên khách thắng đơn vị
+        self.assertEqual(cv.STRONG_RULES, ("tag đúng khách", "nêu đúng tên khách"))
         self.assertIsNone(cv.resolve_rule({"unit": "Trường A", "customer": "Khách A"}, {"text": "đã xong"}, [], "g:k"))   # đơn vị quá ngắn, không nêu
 
 
@@ -678,6 +705,412 @@ class TriagePrepareDefaultsTests(unittest.TestCase):
         t = " ".join(self.help_text(TRIAGE_MAX_LINES="17", TRIAGE_CONTEXT="2").split())
         self.assertIn("(mặc định 17)", t)
         self.assertIn("(mặc định 2)", t)
+
+
+class DedupGuardTests(Base):
+    """Chốt chặn chống trùng: ticket đề xuất mới có neo/tin nguồn đã nằm trong seen_ids của ticket cũ => cập nhật ticket cũ, không tạo mới."""
+
+    OLD = {"key": "g1:m1", "status": "open", "title": "[Trường A] Tạo tài khoản: ds", "customer": "Khách A", "unit": "Trường A", "seen_ids": ["m1", "m2"],
+           "kind": "cs", "priority": "high", "due": "2026-11-12T09:00", "at": "2026-11-10T01:00:00+00:00"}
+
+    def setUp(self):
+        super().setUp()
+        now = time.time() - 900
+        self.history("g1", [text_row("m1", "Nhờ tạo tài khoản cho trường A", now), text_row("m2", "Em gửi danh sách", now + 30), text_row("m3", "Thêm 1 tài khoản nữa", now + 60),
+                            text_row("m4", "Việc khác hẳn", now + 120)])
+        ct.append(self.state / "ledger.jsonl", dict(self.OLD))
+
+    def test_trung_hoan_toan_khong_tao_moi_va_khong_doi_ticket_cu(self):
+        self.llm.reply({"tasks": [task(request_message_id="m2", source_message_ids=["m2"], title="tên model đặt khác", unit="Đơn vị khác")]})
+        rc, out = self.run_main()
+        led = self.ledger()
+        self.assertEqual(set(led), {"g1:m1"})                                   # không có g1:m2
+        self.assertEqual((led["g1:m1"]["title"], led["g1:m1"]["unit"], led["g1:m1"]["status"]), (self.OLD["title"], "Trường A", "open"))
+        self.assertEqual(led["g1:m1"]["seen_ids"], ["m1", "m2"])                # không có tin mới để thêm
+        self.assertIn("chốt chặn chống trùng: tin neo m2 đã có trong ticket cũ g1:m1", out)
+
+    def test_trung_mot_phan_cap_nhat_ticket_cu_voi_tin_moi(self):
+        self.llm.reply({"tasks": [task(request_message_id="m3", source_message_ids=["m2", "m3"], status_hint="resolved_in_chat")]})
+        rc, out = self.run_main()
+        led = self.ledger()
+        self.assertEqual(set(led), {"g1:m1"})                                   # không tạo g1:m3
+        self.assertEqual(led["g1:m1"]["seen_ids"], ["m1", "m2", "m3"])         # thêm đúng tin mới m3
+        self.assertEqual(led["g1:m1"]["status"], "open", "trạng thái chỉ đổi qua bước resolve, không qua chốt chặn")
+        self.assertEqual((led["g1:m1"]["priority"], led["g1:m1"]["due"]), ("high", "2026-11-12T09:00"))
+        self.assertEqual(led["g1:m1"]["title"], self.OLD["title"])
+        self.assertIn("(+1 tin mới)", out)
+
+    def test_khong_trung_thi_tao_moi_nhu_cu(self):
+        self.llm.reply({"tasks": [task(request_message_id="m4", source_message_ids=["m4"], title="[Trường B] Báo lỗi: x", unit="Trường B")]})
+        rc, out = self.run_main()
+        self.assertEqual(set(self.ledger()), {"g1:m1", "g1:m4"})
+        self.assertNotIn("chốt chặn chống trùng", out)
+
+    def test_ticket_cu_da_resolved_thi_giu_resolved(self):
+        ct.append(self.state / "ledger.jsonl", {**self.OLD, "status": "resolved", "at": "2026-11-10T02:00:00+00:00"})
+        self.llm.reply({"tasks": [task(request_message_id="m3", source_message_ids=["m3", "m1"])]})   # hint open của model không được mở lại ticket
+        self.run_main()
+        led = self.ledger()
+        self.assertEqual((led["g1:m1"]["status"], "m3" in led["g1:m1"]["seen_ids"]), ("resolved", True))
+
+    def test_dung_mo_neo_cua_ticket_cu_la_cap_nhat_hop_le_khong_bi_dem_la_chot_chan(self):
+        self.llm.reply({"tasks": [task(request_message_id="m1", source_message_ids=["m3"])]})
+        rc, out = self.run_main()
+        self.assertEqual(self.ledger()["g1:m1"]["seen_ids"], ["m1", "m2", "m3"])
+        self.assertNotIn("chốt chặn chống trùng", out)
+
+    def test_ham_thuan_nhom_khac_khong_bi_chuyen_va_nhieu_de_xuat_gop_mot(self):
+        led = {"g1:m1": dict(self.OLD), "g2:x1": {"key": "g2:x1", "status": "open", "title": "t", "seen_ids": ["x1", "m3"]}}
+        tasks = [task(request_message_id="m3", source_message_ids=["m3"]), task(request_message_id="m2", source_message_ids=["m2", "m9"]),
+                 task(request_message_id="m4", source_message_ids=["m4"])]
+        out, ev = tl.redirect_covered(tasks, led, "g1")
+        self.assertEqual([t["request_message_id"] for t in out], ["m3", "m1", "m4"])    # m3 chỉ nằm trong ticket của nhóm g2 nên giữ nguyên; m2 -> g1:m1
+        self.assertEqual(ev, [{"group": "g1", "anchor": "m2", "old_key": "g1:m1", "new_ids": ["m9"]}])
+        t2, e2 = tl.redirect_covered([task(request_message_id="m2", source_message_ids=["m2", "m9"]), task(request_message_id="m1", source_message_ids=["m1"])],
+                                     {"g1:m1": dict(self.OLD)}, "g1")
+        self.assertEqual(len(t2), 2)                                                     # m1 là mỏ neo hợp lệ của ticket cũ nên không đổi
+
+
+
+class ResolvedEvidenceTests(Base):
+    """Ticket MỚI resolved_in_chat chỉ giữ resolved khi model nêu mã tin NV hợp lệ (trong nhóm, sau tin neo, người gửi là NV, không dùng chung)."""
+
+    @staticmethod
+    def msg(i, role="KH", name="K"):
+        return {"id": i, "role": role, "name": name, "text": "x", "new": True, "when": None}
+
+    def msgs(self):
+        return [self.msg("a1"), self.msg("n1", "NV", "Nhân Viên A"), self.msg("a2"), self.msg("n2", "NV", "Nhân Viên A"), self.msg("k9", "KH", "Khách Z"),
+                self.msg("mz", "KH", "Quản trị - Luatvietnammisa")]
+
+    @staticmethod
+    def rt(anchor, ev=None, hint="resolved_in_chat"):
+        t = task(request_message_id=anchor, source_message_ids=[anchor], status_hint=hint)
+        if ev is not None:
+            t["resolved_evidence_message_id"] = ev
+        return t
+
+    def check(self, tasks, ledger=None):
+        out, events = tl.validate_resolved(tasks, self.msgs(), ledger or {}, "g1")
+        return [t["status_hint"] for t in out], events
+
+    def test_hop_le_giu_resolved(self):
+        st, ev = self.check([self.rt("a1", "n1")])
+        self.assertEqual((st, ev), (["resolved_in_chat"], []))
+
+    def test_thieu_ma_thi_open(self):
+        st, ev = self.check([self.rt("a1")])
+        self.assertEqual(st, ["open"])
+        self.assertEqual((ev[0]["reason"], ev[0]["anchor"], ev[0]["evidence"]), ("thiếu mã tin nhân viên", "a1", None))
+
+    def test_ma_truoc_tin_neo_thi_open(self):
+        st, ev = self.check([self.rt("a2", "n1")])               # n1 đứng trước a2
+        self.assertEqual((st, ev[0]["reason"]), (["open"], "mã không nằm sau tin neo"))
+
+    def test_ma_khac_nhom_hoac_khong_co_trong_cua_so_thi_open(self):
+        st, ev = self.check([self.rt("a1", "nhom-khac-77")])
+        self.assertEqual((st, ev[0]["reason"]), (["open"], "mã không nằm trong cửa sổ của nhóm"))
+
+    def test_nguoi_gui_la_khach_hoac_misa_thi_open(self):
+        st, ev = self.check([self.rt("a1", "k9"), self.rt("a2", "mz")])
+        self.assertEqual(st, ["open", "open"])
+        self.assertEqual({e["reason"] for e in ev}, {"người gửi không phải nhân viên (khách hoặc Misa)"})
+
+    def test_ma_dung_chung_hai_ticket_thi_ca_hai_open(self):
+        st, ev = self.check([self.rt("a1", "n2"), self.rt("a2", "n2")])
+        self.assertEqual(st, ["open", "open"])
+        self.assertEqual([e["reason"] for e in ev], ["mã dùng chung với ticket khác"] * 2)
+
+    def test_ma_da_nam_trong_ticket_cu_cung_nhom_la_dung_chung(self):
+        led = {"g1:old": {"key": "g1:old", "status": "open", "seen_ids": ["old", "n2"]}}
+        st, ev = self.check([self.rt("a1", "n2")], led)
+        self.assertEqual((st, ev[0]["reason"]), (["open"], "mã dùng chung với ticket khác"))
+
+    def test_ma_suy_ra_bang_code_khong_du_de_resolved(self):
+        # có tin NV n1 ngay sau a1 nhưng model KHÔNG nêu mã: code không được tự suy ra
+        st, ev = self.check([self.rt("a1")])
+        self.assertEqual(st, ["open"])
+
+    def test_khong_dong_cham_ticket_open_va_ticket_cap_nhat_ticket_cu(self):
+        led = {"g1:a1": {"key": "g1:a1", "status": "resolved", "seen_ids": ["a1"]}}
+        st, ev = self.check([self.rt("a1", None), self.rt("a2", None, hint="open")], led)   # a1 là ticket cũ (cập nhật); a2 vốn open
+        self.assertEqual((st, ev), (["resolved_in_chat", "open"], []))
+
+    def test_luong_day_du_resolved_hop_le_va_thieu_ma(self):
+        now = time.time() - 900
+        self.history("g1", [text_row("m1", "Nhờ tạo tài khoản cho trường A", now), text_row("m2", "Đã tạo tài khoản rồi ạ", now + 60, ("u_200", "Lợi")),
+                            text_row("m3", "Nhờ tạo tài khoản cho trường B", now + 120)])
+        ok = task(request_message_id="m1", source_message_ids=["m1"], status_hint="resolved_in_chat", resolved_evidence_message_id="m2")
+        thieu = task(request_message_id="m3", source_message_ids=["m3"], status_hint="resolved_in_chat", unit="Trường B", title="[Trường B] Tạo tài khoản: ds")
+        self.llm.reply({"tasks": [ok, thieu]})
+        rc, out = self.run_main()
+        led = self.ledger()
+        self.assertEqual((led["g1:m1"]["status"], led["g1:m3"]["status"]), ("resolved", "open"))
+        self.assertIn("ticket mới m3: resolved -> open (thiếu mã tin nhân viên; mã không có)", out)
+        rows = {r["key"]: r for r in ct.load_jsonl(self.state / "tickets.jsonl") if "update" not in r}
+        self.assertEqual(rows["g1:m1"]["resolved_evidence_message_id"], "m2")      # bằng chứng được lưu cùng ticket
+
+
+class FakeJiraFull:
+    """Jira giả đủ cho jira_push (tạo issue, transition, comment). Ghi (method, path, body)."""
+
+    def __init__(self, two_step=False, already_done=False, no_done_transition=False):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        self.calls, self.n, self.status = [], 0, {}
+        outer = self
+
+        class H(BaseHTTPRequestHandler):
+            def _serve(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n).decode("utf-8")) if n else None
+                path, code, res = self.path, 200, {}
+                outer.calls.append((self.command, path, body))
+                if "/search/jql" in path:
+                    res = {"issues": []}
+                elif path == "/rest/api/3/myself":
+                    res = {"accountId": "me-123"}
+                elif path.startswith("/rest/api/3/project/"):
+                    res = {"name": "My Team"}
+                elif self.command == "POST" and path == "/rest/api/3/issue":
+                    outer.n += 1
+                    key = f"KAN-{outer.n}"
+                    outer.status[key] = "done" if already_done else "new"
+                    code, res = 201, {"key": key}
+                elif "/transitions" in path and self.command == "GET":
+                    key = path.split("/")[5]
+                    if no_done_transition:
+                        res = {"transitions": []}
+                    elif two_step and outer.status[key] == "new":
+                        res = {"transitions": [{"id": "11", "name": "In Progress", "to": {"statusCategory": {"key": "indeterminate"}}}]}
+                    else:
+                        res = {"transitions": [{"id": "31", "name": "Done", "to": {"statusCategory": {"key": "done"}}}]}
+                elif "/transitions" in path and self.command == "POST":
+                    key = path.split("/")[5]
+                    outer.status[key] = "done" if body["transition"]["id"] == "31" else "indeterminate"
+                    code, res = 204, None
+                elif "?fields=status" in path:
+                    key = path.split("/")[5].split("?")[0]
+                    res = {"fields": {"status": {"statusCategory": {"key": "done" if outer.status.get(key) == "done" else "new"}}}}
+                elif path.endswith("/comment"):
+                    code, res = 201, {}
+                data = b"" if res is None else json.dumps(res).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            do_GET = do_POST = do_PUT = _serve  # noqa: N815
+
+            def log_message(self, *a):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def posts(self, suffix):
+        return [(p, b) for m, p, b in self.calls if m == "POST" and p.endswith(suffix)]
+
+
+class JiraResolvedDoneTests(Base):
+    """Ticket resolved (xong trong chat) cũng được đẩy lên Jira rồi chuyển Done; ticket open vẫn để nguyên."""
+
+    def setUp(self):
+        super().setUp()
+        self.history("g1")
+        self.creds = {"JIRA_EMAIL": "t@example.com", "JIRA_API_TOKEN": "khong-that"}
+
+    def jira(self, **kw):
+        j = FakeJiraFull(**kw)
+        self.addCleanup(j.close)
+        cfg = json.loads((self.state / "cs_config.json").read_text(encoding="utf-8"))
+        cfg["jira"] = {"enabled": True, "mode": "task", "project_key": "KAN", "base_url": j.url}
+        (self.state / "cs_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        return j
+
+    def create(self, *tasks):
+        f = self.tmp / "tasks.json"
+        f.write_text(json.dumps(list(tasks), ensure_ascii=False), encoding="utf-8")
+        r = self.script("create_tickets.py", str(f))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def push(self, *args):
+        return self.script("jira_push.py", *args, extra_env=self.creds)
+
+    def state_j(self):
+        return json.loads((self.state / "jira_state.json").read_text(encoding="utf-8"))
+
+    def two(self):
+        self.create(task(request_message_id="m1", title="Mở"), task(request_message_id="m2", title="Xong", status_hint="resolved_in_chat", source_message_ids=["m2"]))
+
+    def test_resolved_duoc_tao_roi_chuyen_done_open_thi_khong(self):
+        j = self.jira()
+        self.two()
+        r = self.push()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(j.posts("/rest/api/3/issue")), 2)                         # cả hai được tạo
+        trs = j.posts("/transitions")
+        self.assertEqual(len(trs), 1)                                                   # chỉ ticket resolved bị chuyển
+        self.assertEqual(trs[0][1], {"transition": {"id": "31"}})
+        self.assertEqual(trs[0][0], "/rest/api/3/issue/KAN-2/transitions")             # KAN-2 = ticket thứ hai (Xong)
+        st = self.state_j()
+        self.assertTrue(st["g1:m2"]["done"] and "done" not in st["g1:m1"])
+        self.assertIn("chuyển Done 1", r.stdout)
+        self.assertEqual(len(j.posts("/comment")), 1)                                   # ghi chú lý do chuyển Done
+
+    def test_chay_lai_khong_tao_trung_va_khong_chuyen_done_lan_nua(self):
+        j = self.jira()
+        self.two()
+        self.push()
+        before = len(j.calls)
+        r = self.push()
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(len(j.posts("/rest/api/3/issue")), 2)
+        self.assertEqual(len(j.posts("/transitions")), 1)
+        self.assertEqual([c for c in j.calls[before:] if c[0] == "POST"], [])
+
+    def test_ticket_da_day_luc_open_sau_do_resolved_thi_chuyen_done(self):
+        j = self.jira()
+        self.create(task(request_message_id="m1", title="Mở"))
+        self.push()
+        self.assertEqual(len(j.posts("/transitions")), 0)
+        ct.append(self.state / "ledger.jsonl", {**self.ledger()["g1:m1"], "status": "resolved", "at": "2026-11-16T05:00:00+00:00"})
+        r = self.push()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p for p, _ in j.posts("/transitions")], ["/rest/api/3/issue/KAN-1/transitions"])
+        self.assertTrue(self.state_j()["g1:m1"]["done"])
+
+    def test_issue_co_san_cua_nguoi_khac_khong_bi_chuyen_done(self):
+        j = self.jira()
+        self.create(task(request_message_id="m1", title="Xong", status_hint="resolved_in_chat", source_message_ids=["m1"]))
+        (self.state / "jira_state.json").write_text(json.dumps({"g1:m1": {"issue": "KAN-9", "comments": 0, "existing": True, "at": "2026-11-16T00:00:00+07:00"}}), encoding="utf-8")
+        self.assertEqual(self.push().returncode, 0)
+        self.assertEqual(j.posts("/transitions"), [])
+
+    def test_workflow_bat_di_vong_thi_di_qua_in_progress_roi_done(self):
+        j = self.jira(two_step=True)
+        self.create(task(request_message_id="m1", title="Xong", status_hint="resolved_in_chat", source_message_ids=["m1"]))
+        r = self.push()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([b["transition"]["id"] for _, b in j.posts("/transitions")], ["11", "31"])
+        self.assertTrue(self.state_j()["g1:m1"]["done"])
+
+    def test_issue_da_done_san_thi_khong_goi_transition(self):
+        j = self.jira(already_done=True)
+        self.create(task(request_message_id="m1", title="Xong", status_hint="resolved_in_chat", source_message_ids=["m1"]))
+        r = self.push()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(j.posts("/transitions"), [])
+        self.assertTrue(self.state_j()["g1:m1"]["done"])
+        self.assertEqual(j.posts("/comment"), [])                                        # không ghi chú thừa
+
+    def test_khong_co_transition_toi_done_thi_canh_bao_mot_lan_khong_tinh_loi_va_khong_thu_lai(self):
+        j = self.jira(no_done_transition=True)
+        self.create(task(request_message_id="m1", title="Xong", status_hint="resolved_in_chat", source_message_ids=["m1"]))
+        r = self.push()
+        self.assertEqual(r.returncode, 0)                                                # không làm job cron báo lỗi
+        self.assertIn("CẢNH BÁO: KAN-1 không chuyển được sang Done (không có transition nào đi tới Done)", r.stdout)
+        self.assertTrue(self.state_j()["g1:m1"].get("done_skip"))
+        self.assertNotIn("done", self.state_j()["g1:m1"])
+        n = len(j.calls)
+        r2 = self.push()
+        self.assertEqual(r2.returncode, 0)
+        self.assertNotIn("CẢNH BÁO", r2.stdout)
+        self.assertFalse([c for c in j.calls[n:] if "transitions" in c[1]])               # lượt sau không hỏi transition nữa
+        self.assertEqual(len(j.posts("/rest/api/3/issue")), 1)
+
+    def test_site_phu_dung_cau_hinh_khoa_va_trang_thai_rieng(self):
+        j = self.jira()                                                                  # site chính trỏ tới máy chủ giả #1
+        j2 = FakeJiraFull()
+        self.addCleanup(j2.close)
+        cfg = json.loads((self.state / "cs_config.json").read_text(encoding="utf-8"))
+        cfg["jira_sites"] = {"csa": {"enabled": True, "mode": "task", "project_key": "SUP", "base_url": j2.url}}
+        (self.state / "cs_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        self.two()
+        # thiếu khoá riêng của site phụ: im lặng, không gọi gì
+        r = self.script("jira_push.py", "--site", "csa", extra_env=self.creds)
+        self.assertEqual((r.returncode, j2.calls), (0, []))
+        env = {**self.creds, "JIRA_CSA_EMAIL": "b@example.com", "JIRA_CSA_API_TOKEN": "khong-that"}
+        r = self.script("jira_push.py", "--site", "csa", extra_env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(j2.posts("/rest/api/3/issue")), 2)
+        self.assertEqual(j.calls, [])                                                   # site chính không bị đụng
+        self.assertEqual(len(j2.posts("/transitions")), 1)                              # resolved cũng chuyển Done ở site phụ
+        self.assertTrue((self.state / "jira_state_csa.json").exists())
+        self.assertFalse((self.state / "jira_state.json").exists())                     # trạng thái tách riêng
+        # site chính vẫn tạo đủ, độc lập với site phụ
+        self.assertEqual(self.push().returncode, 0)
+        self.assertEqual(len(j.posts("/rest/api/3/issue")), 2)
+        self.assertEqual(len(j2.posts("/rest/api/3/issue")), 2)
+
+    def test_default_assignee_me_gan_cho_chu_token(self):
+        j = self.jira()
+        cfg = json.loads((self.state / "cs_config.json").read_text(encoding="utf-8"))
+        cfg["jira"]["default_assignee"] = "me"
+        for st in cfg.get("staff", {}).values():
+            st.pop("jira", None)                                                         # nhân viên chưa có accountId => dùng default_assignee
+        (self.state / "cs_config.json").write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        self.create(task(request_message_id="m1", title="Mở"))
+        self.assertEqual(self.push().returncode, 0)
+        self.assertEqual(len([1 for mt, pa, _ in j.calls if mt == "GET" and pa == "/rest/api/3/myself"]), 1)
+        puts = [(pa, b) for mt, pa, b in j.calls if mt == "PUT" and pa.endswith("/assignee")]
+        self.assertEqual(puts, [("/rest/api/3/issue/KAN-1/assignee", {"accountId": "me-123"})])
+
+    def test_mo_ta_task_co_dinh_dang_nhan_manh_viec_can_lam(self):
+        j = self.jira()
+        self.create(task(request_message_id="m1", title="Mở", unit="Phường A"))
+        self.assertEqual(self.push().returncode, 0)
+        body = next(b for mt, pa, b in j.calls if mt == "POST" and pa == "/rest/api/3/issue")
+        doc = body["fields"]["description"]
+        self.assertEqual(doc["type"], "doc")
+        kinds = [n["type"] for n in doc["content"]]
+        self.assertEqual(kinds[0], "panel")                                              # khung lưu ý đầu tiên: việc cần làm
+        self.assertIn("bulletList", kinds)
+        self.assertIn("blockquote", kinds)
+
+        def walk(n):
+            yield n
+            for c in n.get("content", []):
+                yield from walk(c)
+        nodes = list(walk(doc))
+        bold = [n["text"] for n in nodes if n.get("type") == "text" and any(mk["type"] == "strong" for mk in n.get("marks", []))]
+        self.assertIn("Việc cần làm: ", bold)
+        self.assertIn("Đơn vị: ", bold)
+        self.assertIn("Phường A", bold)                                                   # đơn vị (đã biết) in đậm
+        flat = " ".join(n["text"] for n in nodes if n.get("type") == "text")
+        self.assertIn("m1", flat)                                                         # mã tin neo vẫn là chữ thường để chống trùng tìm được
+        self.assertIn("zalo-ticket-key: g1:m1", flat.replace("  ", " "))
+        self.assertEqual([h for h in nodes if h.get("type") == "heading"][0]["content"][0]["text"], "Thông tin yêu cầu")
+
+    def test_don_vi_chua_ro_thi_khung_canh_bao_va_chu_do(self):
+        j = self.jira()
+        self.create(task(request_message_id="m1", title="Mở", unit=""))
+        self.assertEqual(self.push().returncode, 0)
+        doc = next(b for mt, pa, b in j.calls if mt == "POST" and pa == "/rest/api/3/issue")["fields"]["description"]
+        self.assertEqual(doc["content"][0]["attrs"]["panelType"], "warning")
+        self.assertIn("textColor", json.dumps(doc))
+
+    def test_dry_run_khong_goi_gi_ghi(self):
+        j = self.jira()
+        self.two()
+        r = self.push("--dry-run")
+        self.assertIn("sẽ tạo rồi chuyển Done: Xong", r.stdout)
+        self.assertIn("sẽ tạo: Mở", r.stdout)
+        self.assertEqual([c for c in j.calls if c[0] == "POST"], [])
+
+    def test_not_ours_va_closed_van_khong_day(self):
+        j = self.jira()
+        self.two()
+        self.script("mark_ticket.py", "g1:m1", "not_ours")
+        self.script("mark_ticket.py", "g1:m2", "closed")
+        self.assertEqual(self.push().returncode, 0)
+        self.assertEqual(j.posts("/rest/api/3/issue"), [])
 
 
 if __name__ == "__main__":

@@ -566,7 +566,7 @@ class ClosedStatusTests(Base):
         payloads = json.loads((self.state / "export" / "jsm_requests.json").read_text(encoding="utf-8"))
         self.assertEqual([p["_zalo_key"] for p in payloads], ["g1:m1"])
 
-    def test_resolved_in_chat_la_ticket_resolved_co_trong_csv_khong_day_jira_va_mo_lai_khi_khach_nhac(self):
+    def test_resolved_in_chat_la_ticket_resolved_co_trong_csv_day_jira_chuyen_done_va_mo_lai_khi_khach_nhac(self):
         jira = FakeJira()
         self.addCleanup(jira.close)
         creds = self._jira_cfg(jira)
@@ -584,7 +584,7 @@ class ClosedStatusTests(Base):
         self.assertEqual([p["_zalo_key"] for p in payloads], ["g1:m1"])                              # không vào jsm_requests.json
         push = self.script("jira_push.py", "--dry-run", extra_env=creds)
         self.assertIn("Ticket còn mở", push.stdout)
-        self.assertNotIn("Ticket xong sẵn", push.stdout)                                               # KHÔNG đẩy Jira
+        self.assertIn("sẽ tạo rồi chuyển Done: Ticket xong sẵn", push.stdout)                         # từ 16/11: resolved cũng đẩy, rồi chuyển Done
         self.assertEqual({d["key"] for d in json.loads(self.script("create_tickets.py", "--list-open").stdout)}, {"g1:m1"})
         compact = self.script("create_tickets.py", "--list-open", "--group", "g1", "--compact").stdout
         self.assertIn("(đã xong trong chat) Ticket xong sẵn", compact)                              # compact vẫn hiện để khách nhắc lại thì mở lại được

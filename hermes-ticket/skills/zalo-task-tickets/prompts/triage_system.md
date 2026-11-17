@@ -35,7 +35,7 @@ Chỉ tạo ticket từ phần TIN MỚI; phần NGỮ CẢNH chỉ để hiểu
 - `customer_name`, `customer_zalo_id`: người nêu yêu cầu (null với nhóm nội bộ).
 - `attachments`: `[{"name","path"}]`. `kind`: "cs" hoặc "internal".
 - `source_message_ids`: mỏ neo và các tin liên quan, đều phải nằm trong TIN MỚI. `quote`: trích nguyên văn câu yêu cầu (hoặc câu bổ sung mới nhất nếu là cập nhật).
-- `status_hint`: "open" | "resolved_in_chat". `confidence`: 0-1 (dưới 0.6 nghĩa là không chắc đây là yêu cầu).
+- `status_hint`: "open" | "resolved_in_chat". Chỉ đặt "resolved_in_chat" khi có MỘT tin của nhân viên (NV) NẰM SAU tin neo báo rõ yêu cầu này đã xong, và ghi mã tin đó vào `resolved_evidence_message_id` (đúng mã trong ngoặc vuông, tin của NV, không phải khách/Misa; mỗi ticket một mã riêng, không dùng chung một tin chung chung cho nhiều ticket). Không có mã như vậy thì đặt "open" (code sẽ tự chuyển về open nếu mã không hợp lệ). `confidence`: 0-1 (dưới 0.6 nghĩa là không chắc đây là yêu cầu).
 
 ## Định dạng trả về
 {"tasks": [ {...}, ... ], "notes_update": "..."}
